@@ -4,7 +4,7 @@
  * 实现多规则评分体系，总分 >= 100 分时判定为危险网站。
  *
  * @module scoring-engine
- * @version 2.2.0
+ * @version 2.2.1
  *
  * 评分规则：
  *   规则一 域名仿冒         → 60 分 | 5 层递进：子串包含 → 段级关键词 → 可疑TLD → 关键词堆叠 → 编辑距离
@@ -18,6 +18,7 @@
  *   下载链接跨域检测         → 最高 20 分 | 跨域下载 + 新注册域名附加分（由 Service Worker 下载事件触发）
  *
  * 优化策略：
+ *   - 可信平台白名单：Wiki/博客/代码托管等 UGC 平台的注册域命中后跳过规则一，避免误报
  *   - 官方网站早期退出：域名+ICP 均确认安全后跳过规则四/五
  *   - 规则四 Part B-b 仅对压缩包链接加分，普通文件链接不再单独计分
  *   - 规则五区分三信号组合：DOM节点数+框架标记+外部资源，避免对正常简单页面误报
@@ -29,6 +30,7 @@ import { DomainDatabase } from './domain-database.js';
 import { IcpUtils } from './icp-utils.js';
 import { WhoisClient } from './whois-client.js';
 import { UrlUtils } from '../utils/url-utils.js';
+import { TrustedPlatforms } from '../utils/trusted-platforms.js';
 import {
   SCORE_THRESHOLD, SCORE_RULE_1, SCORE_RULE_2_HIGH, SCORE_RULE_2_LOW,
   SCORE_RULE_3, SCORE_RULE_5, SCORE_RULE_5_PARTIAL, RISK_LEVEL,
@@ -133,6 +135,17 @@ export class ScoringEngine {
       detail: '', detailCN: '域名检查: 无异常',
       matchedEntry: null, correctUrl: null, officialName: null
     };
+
+    // ---- 可信平台白名单前置检查 ----
+    // 提取注册域（eTLD+1），若命中白名单则完全跳过仿冒检测。
+    // 这些平台的子页面（如 minecraft.fandom.com）属于用户生成内容，
+    // 不应因 URL 中包含品牌关键词而被误判为仿冒官网。
+    const mainDomain = UrlUtils.getMainDomain(domain);
+    if (TrustedPlatforms.isTrusted(mainDomain)) {
+      result.detail = `可信平台（${mainDomain}），跳过域名仿冒检测`;
+      result.detailCN = `域名: 可信平台（${mainDomain}）`;
+      return result;
+    }
 
     // 精确匹配官方域名 → 安全
     const official = DomainDatabase.findByDomain(domain);

@@ -3,7 +3,7 @@
 > Chrome/Edge 浏览器扩展，实时检测银狐木马（Silver Fox Trojan）钓鱼与仿冒网站。
 
 [![Manifest](https://img.shields.io/badge/Manifest-V3-blue)](https://developer.chrome.com/docs/extensions/mv3/)
-[![Version](https://img.shields.io/badge/Version-2.2.0-orange)](https://github.com)
+[![Version](https://img.shields.io/badge/Version-2.2.1-orange)](https://github.com)
 
 ---
 
@@ -24,7 +24,8 @@
 
 **附加功能**：
 
-- **白名单** — 信任的网站可加入白名单，跳过所有检测
+- **可信平台白名单** — Wiki / 博客 / 代码托管等 UGC 平台的注册域自动跳过仿冒检测，避免误报
+- **用户白名单** — 信任的网站可加入白名单，跳过所有检测
 - **官方网站早期退出** — 域名+ICP 均通过检测后自动跳过后续规则
 - **下载拦截** — 危险网站自动注入拦截脚本，禁用下载按钮和危险链接
 - **警告弹窗** — 独立窗口展示风险详情，支持一键跳转官方网站并关闭危险页面
@@ -78,8 +79,9 @@ VirusDetector/
 │   └── warning.js                     # 警告窗口控制 —— 关闭危险页面、跳转安全页面
 └── utils/
     ├── constants.js                   # 评分常量、可疑 TLD 模式、下载关键词、阈值配置
-    ├── url-utils.js                   # 域名解析、主域提取、嵌套 TLD 检测
-    └── messaging.js                   # chrome.runtime 消息通信封装
+    ├── url-utils.js                   # 域名解析、PSL 主域提取、DoH DNS 查询
+    ├── messaging.js                   # chrome.runtime 消息通信封装
+    └── trusted-platforms.js          # 可信平台白名单 —— UGC 平台跳过仿冒检测
 ```
 
 ### 技术特点
@@ -213,6 +215,28 @@ score = floor(60 / (1 + (x / (60 × b))^a))
 
 此规则在下载事件触发时异步执行，与规则二（压缩包下载）协同工作。
 
+### 可信平台白名单（误报抑制）
+
+为避免对合法 Wiki、代码托管、博客等 UGC 平台的子页面误判为仿冒官网，规则一在执行前会先通过可信平台白名单进行过滤：
+
+- **匹配粒度**：提取 URL 的**注册域**（eTLD+1），例如 `minecraft.fandom.com` → `fandom.com`
+- **命中行为**：注册域命中白名单 → **完全跳过规则一**（域名仿冒检测），不添加仿冒分数
+- **其他规则**：规则二~五、域名年龄、下载跨域检测等仍正常运行，不因白名单而跳过
+- **可扩展**：白名单基于 `Set` 实现 O(1) 查找，新增/移除平台只需修改数组字面量
+
+白名单覆盖 **44 个平台**，按类别包括：
+
+| 类别 | 平台 |
+| ---- | ---- |
+| Wiki 农场 | fandom.com, wikia.com, wikimedia.org, miraheze.org, wiki.gg, gamepedia.com |
+| 代码托管 Pages | github.io, gitlab.io, bitbucket.io, sourceforge.io, codeberg.page |
+| PaaS / 静态托管 | netlify.app, vercel.app, herokuapp.com, pages.dev, surge.sh, glitch.me, onrender.com, fly.dev, workers.dev, deno.dev |
+| 博客平台 | medium.com, wordpress.com, blogger.com, blogspot.com, tumblr.com, hatenablog.com, fc2.com, livejournal.com, typepad.com, substack.com, ghost.io, hashnode.dev, dev.to |
+| 文档 / 知识库 | readthedocs.io, notion.site, gitbook.io |
+| 建站 / 个人页 | weebly.com, wixsite.com, jimdo.com, strikingly.com, carrd.co, about.me, linktr.ee |
+
+> **与用户白名单的区别**：用户白名单（弹窗中操作）完全跳过所有 8 项检测规则；可信平台白名单仅跳过规则一（域名仿冒），是一个内置的、面向 UGC 平台的误报抑制机制。
+
 ### 评分体系
 
 ```text
@@ -225,13 +249,15 @@ score = floor(60 / (1 + (x / (60 × b))^a))
 域名年龄减分            -20 ──→
 下载链接跨域            +20 ──→
 
-优化：规则一 + 规则三均安全 → 跳过规则四/五（官方网站早期退出）
-域名年龄减分仅在当前总分 >= 20 时应用（避免低分网站过度减分）
+优化：
+  - 可信平台白名单：注册域命中 → 规则一自动跳过，避免 UGC 平台误报
+  - 规则一 + 规则三均安全 → 跳过规则四/五（官方网站早期退出）
+  - 域名年龄减分仅在当前总分 >= 20 时应用（避免低分网站过度减分）
 ```
 
 ### 插件功能
 
-#### 白名单系统
+#### 用户白名单系统
 
 用户可将信任的网站加入白名单：
 
