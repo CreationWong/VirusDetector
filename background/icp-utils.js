@@ -186,6 +186,23 @@ const ICP_EXEMPT_DOMAINS = new Set([
   'gov.uk',       // 英国政府
   'gov.au',       // 澳大利亚政府
   'gov.sg',       // 新加坡政府
+
+  // —— 保留/专用域名（不暴露公网，无需 ICP 备案）——
+  // 本地/内网专用（RFC 6761/6762/8375，不暴露公网）
+  'local',         // RFC 6762: 局域网 mDNS（打印机/NAS/树莓派）
+  'localhost',     // RFC 6761: 本机回环（127.0.0.1）
+  'home.arpa',     // RFC 8375: 家庭内网
+  'internal',      // ICANN 保留: 企业内部网络
+  'test',          // RFC 6761: 开发测试
+  // 文档/示例专用（RFC 2606/6761，禁止实际使用）
+  'example',       // RFC 6761: 文档示例（www.example.com）
+  'example.com',   // RFC 2606: 通用示例域名
+  'example.net',   // RFC 2606: 通用示例域名
+  'example.org',   // RFC 2606: 通用示例域名
+  // 反向解析与基础架构
+  'arpa',          // 根域: DNS 基础设施
+  'in-addr.arpa',  // RFC 1035: IPv4 反向解析
+  'ip6.arpa',      // RFC 3596: IPv6 反向解析
 ]);
 
 /**
