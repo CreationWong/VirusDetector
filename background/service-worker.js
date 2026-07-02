@@ -29,6 +29,30 @@ import {
   STORAGE_KEYS, CACHE_TTL
 } from '../utils/constants.js';
 
+// ==================== URL 协议守卫 ====================
+
+/**
+ * 判断 URL 是否应跳过分析（仅分析 http/https 协议）
+ *
+ * 修复历史误报：file://、data:、ftp:、view-source: 等协议的 URL
+ *  - 没有可分析的主机名（hostname 为 ""）
+ *  - 历史上所有 file:// 页面共享同一个空字符串缓存键 `domain_cache_`，
+ *    一次恶意缓存会污染所有本地文件
+ *  - Content Script 在 `<all_urls>` 下也会运行于 file:// 页面并发送数据
+ *
+ * @param {string} url
+ * @returns {boolean} true 表示应跳过（不分析）
+ */
+function shouldSkipUrl(url) {
+  if (!url || typeof url !== 'string') return true;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol !== 'http:' && protocol !== 'https:';
+  } catch (e) {
+    return true; // 无法解析的 URL 视为应跳过
+  }
+}
+
 // ==================== 缓存清洗 ====================
 
 /**
@@ -489,6 +513,16 @@ function openWarningWindow(tabState) {
  * 完整的页面分析流程
  */
 async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
+  // 防御性深度：所有进入分析入口的 URL 都先经协议守卫
+  // 覆盖三个调用方：webNavigation、PAGE_ANALYSIS_RESULT 消息、REMOVE_FROM_WHITELIST
+  if (shouldSkipUrl(url)) {
+    console.log('[ServiceWorker] 跳过非 http(s) URL:', url);
+    await CacheManager.remove('').catch(() => {});
+    resetIcon(tabId);
+    await clearTabState(tabId);
+    return;
+  }
+
   let tabState = await loadTabState(tabId);
 
   // 白名单检查：如果在白名单中，跳过所有检测
@@ -595,9 +629,13 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   if (details.frameId !== 0) return;
   const { tabId, url } = details;
 
-  if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') ||
-      url.startsWith('about:') || url.startsWith('edge://')) {
-    resetIcon(tabId); await clearTabState(tabId); return;
+  // 内部浏览器页面 / 本地文件 / 非 http(s) 协议：直接跳过
+  // （一次性清理空域名旧缓存，避免历史恶意缓存影响所有 file:// 页面）
+  if (shouldSkipUrl(url)) {
+    await CacheManager.remove('').catch(() => {});
+    resetIcon(tabId);
+    await clearTabState(tabId);
+    return;
   }
 
   const domain = UrlUtils.extractHostname(url);
