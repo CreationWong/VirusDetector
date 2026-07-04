@@ -24,10 +24,11 @@
  *   - keywordToEntries：关键词 → 品牌记录列表 映射（O(1) 反查）
  *   - sortedKeywords：按长度降序排列（优先匹配长品牌词，避免短词吞掉长词）
  *
- * 仿冒检测策略（3 规则递进，命中即返回）：
- *   A. 精确段匹配     → 标签段完全等于品牌关键词（所有长度）
- *   B. 边界包含       → 关键词在 label 中出现且位于分隔符边界（仅 kw ≥ 4 字符）
- *   C. 关键词堆叠     → 同一关键词在所有段中精确出现 ≥ 3 次
+ * 仿冒检测策略（4 规则递进，命中即返回）：
+ *   A.  精确段匹配    → 标签段完全等于品牌关键词（所有长度）
+ *   A-2.连字匹配      → 标签去分隔符（-/_）后拼接结果等于关键词
+ *   B.  边界包含      → 关键词在 label 中出现且位于分隔符边界（仅 kw ≥ 4 字符）
+ *   C.  关键词堆叠    → 同一关键词在所有段中精确出现 ≥ 3 次
  */
 export const SOFTWARE_CATEGORIES = {
   SECURITY: '安全软件',
@@ -102,7 +103,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.SECURITY,
     keywords: ['微步', 'threatbook', '微步在线'],
     isChineseBrand: true
-  },,
+  },
 // ========== 浏览器 ==========
   {
     name: '360浏览器',
@@ -125,7 +126,7 @@ const DOMAIN_DATABASE = [
     officialDomains: ['ie.sogou.com'],
     correctUrl: 'https://ie.sogou.com',
     category: SOFTWARE_CATEGORIES.BROWSER,
-    keywords: ['搜狗浏览器', 'sogou浏览器', '搜狗高速浏览器'],
+    keywords: ['搜狗浏览器', 'sogou浏览器', '搜狗高速浏览器', 'sogou'],
     isChineseBrand: true
   },
   {
@@ -175,7 +176,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.BROWSER,
     keywords: ['Edge', 'Microsoft Edge', 'edge浏览器'],
     isChineseBrand: false
-  },,
+  },
 // ========== 即时通讯/社交 ==========
   {
     name: '微信',
@@ -240,7 +241,15 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.IM_SOCIAL,
     keywords: ['Soul', 'soulapp'],
     isChineseBrand: true
-  },,
+  },
+  {
+    name: 'UC浏览器',
+    officialDomains: ['uc.cn', 'ucweb.com'],
+    correctUrl: 'https://www.uc.cn',
+    category: SOFTWARE_CATEGORIES.BROWSER,
+    keywords: ['UC浏览器', 'uc浏览器', 'UC', 'uc', 'ucweb', 'UC Browser'],
+    isChineseBrand: true
+  },
 // ========== 输入法 ==========
   {
     name: '搜狗输入法',
@@ -281,7 +290,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.INPUT_METHOD,
     keywords: ['手心输入法', '手心'],
     isChineseBrand: true
-  },,
+  },
 // ========== 办公软件 ==========
   {
     name: 'WPS Office',
@@ -314,7 +323,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.OFFICE,
     keywords: ['永中', 'yozo', '永中Office', '永中软件'],
     isChineseBrand: true
-  },,
+  },
 // ========== 视频网站 ==========
   {
     name: '腾讯视频',
@@ -371,7 +380,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.VIDEO,
     keywords: ['搜狐视频', 'sohu视频'],
     isChineseBrand: true
-  },,
+  },
 // ========== 音乐软件 ==========
   {
     name: '网易云音乐',
@@ -420,7 +429,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.MUSIC,
     keywords: ['咪咕音乐', '咪咕', 'migu', '中国移动音乐', 'migumusic'],
     isChineseBrand: true
-  },,
+  },
 // ========== 云存储/网盘 ==========
   {
     name: '百度网盘',
@@ -477,7 +486,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.CLOUD_STORAGE,
     keywords: ['迅雷云盘', '迅雷网盘', '迅雷云'],
     isChineseBrand: true
-  },,
+  },
 // ========== AI Chat ==========
   {
     name: '文心一言',
@@ -542,7 +551,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.AI_CHAT,
     keywords: ['智谱清言', 'chatglm', '智谱', 'GLM', '清言', 'bigmodel'],
     isChineseBrand: true
-  },,
+  },
 // ========== 下载工具 ==========
   {
     name: '迅雷',
@@ -567,7 +576,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.DOWNLOAD_TOOL,
     keywords: ['比特彗星', 'BitComet', 'bitcomet', 'BitComet下载', 'BT下载客户端'],
     isChineseBrand: false
-  },,
+  },
 // ========== 压缩工具 ==========
   {
     name: 'WinRAR',
@@ -608,7 +617,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.COMPRESSION,
     keywords: ['360压缩', '360yasuo', '360zip'],
     isChineseBrand: true
-  },,
+  },
 // ========== 电商 ==========
   {
     name: '淘宝',
@@ -657,7 +666,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.E_COMMERCE,
     keywords: ['闲鱼', 'goofish', 'xianyu'],
     isChineseBrand: true
-  },,
+  },
 // ========== 地图/出行 ==========
   {
     name: '百度地图',
@@ -690,7 +699,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.MAP_TRAVEL,
     keywords: ['腾讯地图', 'qq地图'],
     isChineseBrand: true
-  },,
+  },
 // ========== 支付 ==========
   {
     name: '支付宝',
@@ -707,7 +716,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.PAYMENT,
     keywords: ['微信支付', 'weixin支付', 'wechatpay', 'wechat pay'],
     isChineseBrand: true
-  },,
+  },
 {
     name: '阿里云',
     officialDomains: ['aliyun.com', 'aliyuncs.com', 'alibabacloud.com'],
@@ -787,7 +796,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.DEVELOPER,
     keywords: ['Github', 'GitHub'],
     isChineseBrand: false
-  },,
+  },
 // ========== 系统工具 ==========
   {
     name: '驱动精灵',
@@ -844,7 +853,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.SYSTEM_TOOL,
     keywords: ['AnyDesk', 'anydesk', '远程桌面', '远程访问'],
     isChineseBrand: false
-  },,
+  },
   {
     name: '联想',
     officialDomains: ['lenovo.com.cn', 'lenovo.com'],
@@ -886,7 +895,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.GAME,
     keywords: ['网易游戏', 'netease游戏', 'Netease Games'],
     isChineseBrand: true
-  },,
+  },
 // ========== 游戏加速器 ==========
   {
     name: '网易UU加速器',
@@ -977,14 +986,6 @@ const DOMAIN_DATABASE = [
     isChineseBrand: true
   },
   {
-    name: '流星加速器',
-    officialDomains: ['liuxing.com'],
-    correctUrl: 'https://www.liuxing.com',
-    category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
-    keywords: ['流星', 'liuxing', '流星加速器', 'lxjsq', '流星游戏加速器'],
-    isChineseBrand: true
-  },
-  {
     name: 'NN加速器',
     officialDomains: ['nn.com'],
     correctUrl: 'https://www.nn.com',
@@ -999,7 +1000,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.GAME_ACCELERATOR,
     keywords: ['AK加速器', 'akjsq', 'AK', 'akspeedy'],
     isChineseBrand: true
-  },,
+  },
 // ========== 新闻/信息 ==========
   {
     name: '今日头条',
@@ -1024,7 +1025,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.NEWS_INFO,
     keywords: ['知乎', 'zhihu'],
     isChineseBrand: true
-  },,
+  },
 // ========== 高校/教育 ==========
   {
     name: '清华大学',
@@ -1185,7 +1186,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.EDUCATION,
     keywords: ['人大', 'ruc'],
     isChineseBrand: true
-  },,
+  },
 // ========== 高校/教育 ==========
   {
     name: '北京师范大学',
@@ -1346,7 +1347,7 @@ const DOMAIN_DATABASE = [
     category: SOFTWARE_CATEGORIES.EDUCATION,
     keywords: ['南航', 'nuaa'],
     isChineseBrand: true
-  },,
+  },
 // ========== 高校/教育 ==========
   {
     name: '南京理工大学',
@@ -1454,7 +1455,7 @@ const DOMAIN_DATABASE = [
     isChineseBrand: false,
     isNonChineseBrand: true
   },
-];;
+];
 
 // ==================== 快速索引构建 ====================
 
@@ -1585,6 +1586,24 @@ export class DomainDatabase {
               correctUrl: entry.correctUrl,
               matchType: 'segment_exact_match',
               matchedBy: `段 "${seg}" 精确匹配关键词 "${kw}"`
+            };
+          }
+        }
+      }
+
+      // ---- 规则 A-2：连字匹配 —— 标签去除分隔符后精确匹配关键词 ----
+      // 钓鱼攻击常在品牌词中插入连字符：any-desk...
+      for (const label of labels) {
+        if (label.includes('-') || label.includes('_')) {
+          const joined = label.replace(/[-_]/g, '');
+          if (joined === kw) {
+            const entry = keywordToEntries.get(kw)[0];
+            return {
+              entry,
+              officialDomain: entry.officialDomains[0],
+              correctUrl: entry.correctUrl,
+              matchType: 'joined_label_match',
+              matchedBy: `标签 "${label}" 去分隔符后精确匹配关键词 "${kw}"`
             };
           }
         }
