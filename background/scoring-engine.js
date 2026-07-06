@@ -98,8 +98,19 @@ export class ScoringEngine {
       result5 = this._evaluateRule5(pageMetrics, domain, pageText);
     }
 
-    // 规则二：Phase A 主动扫描页面压缩包链接 + Phase B 被动检测实际下载
-    const result2 = await this._evaluateRule2(downloadState, linkMetrics, existingScore);
+    // 规则二：Phase A 主动扫描 + Phase B 被动检测
+    // 官方网站跳过下载检测（与规则四/五一致，避免对官网的正常压缩包下载产生误报）
+    let result2;
+    if (isConfirmedOfficial) {
+      result2 = {
+        score: 0, triggered: false, status: 'pass',
+        detail: '官方网站，跳过下载检测',
+        detailCN: '下载检测: 官方网站',
+        fileName: null, proactiveHits: 0, proactiveScore: 0, reactiveTriggered: false
+      };
+    } else {
+      result2 = await this._evaluateRule2(downloadState, linkMetrics, existingScore);
+    }
 
     // 域名年龄评分（Whois API）：非官方域名时调用，基于注册天数 S 型衰减计分
     let domainAgeResult = { score: 0, triggered: false, status: 'pass', detail: '', detailCN: '域名年龄: 未检测', creationDays: -1 };

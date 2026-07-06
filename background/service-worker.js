@@ -767,7 +767,8 @@ chrome.webNavigation.onCompleted.addListener(async (details) => {
   const domain = UrlUtils.extractHostname(url);
   let tabState = await loadTabState(tabId);
   tabState.url = url; tabState.domain = domain;
-  tabState.downloadState = tabState.downloadState || { hasDownloadedArchive: false };
+  // 导航到新页面时重置下载状态，避免旧页面的下载事件污染新页面的检测
+  tabState.downloadState = { hasDownloadedArchive: false, archiveFileName: null };
   tabState.isAnalyzed = false;
   await saveTabState(tabId, tabState);
 
@@ -836,6 +837,18 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     if (tabState.isWhitelisted) {
       console.log('[ServiceWorker] 白名单网站，跳过下载检测:', tabState.domain);
       return;
+    }
+
+    // 官方网站检查：域名+ICP 均通过检测的官网不拦截下载
+    if (tabState.isAnalyzed) {
+      const r1 = tabState.ruleResults && tabState.ruleResults.rule1;
+      const r3 = tabState.ruleResults && tabState.ruleResults.rule3;
+      if (r1 && r3 &&
+          !r1.triggered && r1.status === 'pass' &&
+          !r3.triggered && r3.status === 'pass') {
+        console.log('[ServiceWorker] 官方网站，跳过下载检测:', tabState.domain);
+        return;
+      }
     }
 
     // 更新下载状态
