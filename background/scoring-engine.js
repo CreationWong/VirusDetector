@@ -20,6 +20,7 @@
  *
  * 优化策略：
  *   - 可信平台白名单：Wiki/博客/代码托管等 UGC 平台的注册域命中后跳过规则一，避免误报
+ *   - .edu.cn 教育机构域名前置跳过：CERNET 管理，攻击者无法注册，可信放行
  *   - PSL 统一域名标准化：注册域提取应用于白名单、官方匹配、RDAP/Whois 查询
  *   - 官方网站早期退出：域名+ICP 均确认安全后跳过规则四/五
  *   - 规则四 Part B-b 仅对压缩包链接加分，普通文件链接不再单独计分
@@ -156,6 +157,14 @@ export class ScoringEngine {
     };
 
     const mainDomain = UrlUtils.getMainDomain(domain);
+
+    // ---- 教育机构域名前置检查 ----
+    // .edu.cn 由 CERNET 管理，仅限教育机构申请，攻击者无法注册，可安全跳过
+    if (domain.endsWith('.edu.cn')) {
+      result.detail = '教育机构域名（.edu.cn），跳过域名仿冒检测';
+      result.detailCN = '域名: 教育机构域名';
+      return result;
+    }
 
     // ---- 可信平台白名单前置检查 ----
     if (TrustedPlatforms.isTrusted(mainDomain)) {
