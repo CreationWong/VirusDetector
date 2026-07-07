@@ -21,6 +21,8 @@
  *   4. 响应来自 Service Worker 的 REQUEST_PAGE_TEXT 重采请求（仅返回派生文本指标，不传正文）
  */
 
+import {PROMO_KEYWORDS} from './utils/constants.js';
+
 (function () {
   'use strict';
 
@@ -61,6 +63,11 @@
     // 收集待检测死链的候选项（同域名的不同路径链接）
     var deadLinkCandidates = [];
 
+    // 辅助函数：检查元素是否在导航/页头/页脚区域（这些区域的同页链接是正常行为）
+    function isInNavigationZone(el) {
+      return el.closest('nav, header, footer, [role="navigation"]') !== null;
+    }
+
     for (var i = 0; i < links.length; i++) {
       var link = links[i];
       var href = (link.getAttribute('href') || '').trim();
@@ -72,14 +79,16 @@
         continue;
       }
 
-      // ① 同页链接：仅当链接完整URL与当前页URL完全一致时计入
+      // ① 同页链接：仅当链接完整URL与当前页URL完全一致、且不在导航区域时计入
       try {
         var resolved = new URL(href, window.location.href);
         var resolvedHref = resolved.href;
 
-        // 严格比对：完整URL完全一致
+        // 严格比对：完整URL完全一致 + 排除导航/页头/页脚
         if (resolvedHref === currentUrl) {
-          samePageLinks++;
+          if (!isInNavigationZone(link)) {
+            samePageLinks++;
+          }
         } else if (resolved.hostname === currentHost) {
           // 同域名但不同路径 → 可能是死链候选
           deadLinkCandidates.push({ href: resolvedHref, text: (link.textContent || '').trim().substring(0, 50), element: link });
@@ -246,6 +255,81 @@
       } catch (e2) { /* URL 解析失败，跳过 */ }
     }
 
+    // ==================== 页面文本中扫描隐藏压缩包链接（多级跳转检测） ====================
+    // 恶意跳转页面常在正文中以纯文本形式写下载链接（非 <a> 标签）
+    var TEXT_ARCHIVE_PATTERN = /https?:\/\/[^\s<>"'{}[\]|\\^`]+\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab|arj|lzh|zst)(\?[^\s<>"'{}[\]|\\^`]*)?/gi;
+    var pageTextForScan = (document.body ? document.body.innerText : '') || '';
+    var textArchiveUrls = [];
+    var textArchiveSeen = new Set();
+
+    var tmatch;
+    while ((tmatch = TEXT_ARCHIVE_PATTERN.exec(pageTextForScan)) !== null) {
+      var rawUrl = tmatch[0];
+      try {
+        var tparsed = new URL(rawUrl);
+        var tnormalized = tparsed.href.replace(/#.*$/, '');
+        if (!textArchiveSeen.has(tnormalized)) {
+          textArchiveSeen.add(tnormalized);
+          textArchiveUrls.push({
+            href: tnormalized.substring(0, 200),
+            isCrossDomain: tparsed.hostname !== currentHost,
+            ext: '.' + tmatch[1].toLowerCase(),
+            source: 'text'
+          });
+        }
+      } catch (e) { /* 无效 URL，跳过 */ }
+    }
+
+    // ==================== .txt 文件内容解析（多级跳转检测） ====================
+    // 页面 <a> 标签可能指向 .txt 文件，其内容包含真实的下载链接
+    var txtLinks = [];
+    for (var j2 = 0; j2 < links.length; j2++) {
+      var tlink = links[j2];
+      var thref = (tlink.getAttribute('href') || '').trim();
+      if (!thref) continue;
+      var tlower = thref.toLowerCase();
+      if (tlower.endsWith('.txt') && !/^javascript\s*:/i.test(thref)) {
+        try {
+          var tresolved = new URL(thref, window.location.href);
+          txtLinks.push(tresolved.href);
+        } catch (e) {}
+      }
+    }
+
+    // 去重后最多尝试 3 个 .txt 文件
+    var uniqueTxtLinks = [];
+    var txtSeen = new Set();
+    for (var u = 0; u < txtLinks.length; u++) {
+      if (!txtSeen.has(txtLinks[u])) {
+        txtSeen.add(txtLinks[u]);
+        uniqueTxtLinks.push(txtLinks[u]);
+      }
+    }
+    var txtToFetch = uniqueTxtLinks.slice(0, 3);
+    var txtDerivedArchiveUrls = [];
+
+    for (var t2 = 0; t2 < txtToFetch.length; t2++) {
+      try {
+        var resp = await fetchWithTimeout(txtToFetch[t2], {}, 3000);
+        if (resp.ok) {
+          var txtContent = await resp.text();
+          var ZIP_PATTERN = /https?:\/\/[^\s<>"'{}[\]|\\^`]+\.(zip|rar|7z|tar|gz|tgz|bz2|xz|iso|cab)(\?[^\s<>"'{}[\]|\\^`]*)?/gi;
+          var zmatch;
+          while ((zmatch = ZIP_PATTERN.exec(txtContent)) !== null) {
+            try {
+              var zurl = new URL(zmatch[0]);
+              txtDerivedArchiveUrls.push({
+                href: zurl.href.substring(0, 200),
+                isCrossDomain: zurl.hostname !== currentHost,
+                ext: '.' + zmatch[1].toLowerCase(),
+                source: 'txt-derived'
+              });
+            } catch (e) {}
+          }
+        }
+      } catch (e) { /* CORS 阻止或网络错误，跳过 */ }
+    }
+
     return {
       totalLinks: links.length,
       samePageLinks: samePageLinks, deadLinks: deadLinks, deadLinkSamples: deadLinkSamples,
@@ -258,7 +342,10 @@
       // 规则四A-③
       duplicateLinks: duplicateLinks,
       hasDuplicateLinks: duplicateLinks.length > 0,
-      hasDuplicateDownloadLink: duplicateLinks.some(function(d) { return d.isDownloadLink; })
+      hasDuplicateDownloadLink: duplicateLinks.some(function(d) { return d.isDownloadLink; }),
+      // 规则四 Part C 数据源：多级跳转检测
+      textArchiveUrls: textArchiveUrls,
+      txtDerivedArchiveUrls: txtDerivedArchiveUrls
     };
   }
 
@@ -307,17 +394,6 @@
     }
     const cjkRatio = textLength > 0 ? cjkCount / textLength : 0;
     const hasCJK = (cjkCount >= 30 && cjkRatio >= 0.08) || cjkCount >= 500;
-
-    const PROMO_KEYWORDS = [
-      '下载', '产品', '软件', '安装', '免费', '官方', '应用', '工具',
-      '版本', '最新', '破解', '注册', '激活', '绿色', '汉化', '插件',
-      '专业版', '正式版', '购买', '激活码', '注册机', '补丁', '试用',
-      '客户端', '安装包', '精简版', '去广告', '便携版',
-      'download', 'product', 'software', 'install', 'free', 'official',
-      'app', 'tool', 'version', 'latest', 'crack', 'register', 'activate',
-      'pro', 'premium', 'setup', 'license', 'keygen', 'patch', 'trial',
-      'portable', 'release', 'full version'
-    ];
 
     const lowerText = bodyText.toLowerCase();
     let promoKeywordMatchCount = 0;

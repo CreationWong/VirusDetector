@@ -48,7 +48,7 @@ import {
   SCORE_RULE_2_BATCH_THRESHOLD, SCORE_RULE_2_BATCH_MULTIPLIER,
   SCORE_RULE_2_SUSPICION_MULTIPLIER,
   ARCHIVE_EXTENSIONS, AI_PAGE_THRESHOLDS, SAME_PAGE_LINK_THRESHOLD,
-  DUPLICATE_LINK_THRESHOLD,
+  DUPLICATE_LINK_THRESHOLD, DEAD_LINK_THRESHOLD,
   SCORE_DOMAIN_AGE_MAX, DOMAIN_AGE_DECAY_A, DOMAIN_AGE_DECAY_B,
   SCORE_DOMAIN_AGE_BONUS_MAX, DOMAIN_AGE_BONUS_SCORE_THRESHOLD,
   DOMAIN_AGE_BONUS_MIN_DAYS, DOMAIN_AGE_BONUS_MAX_DAYS,
@@ -773,8 +773,8 @@ export class ScoringEngine {
       partAReasons.push(linkMetrics.samePageLinks + '个链接完全指向当前页');
     }
 
-    // Part A-②：≥1个死链（HEAD请求验证为不存在子页面）
-    if (linkMetrics.deadLinks >= 1) {
+    // Part A-②：≥DEAD_LINK_THRESHOLD 个死链（HEAD请求验证为不存在子页面）
+    if (linkMetrics.deadLinks >= DEAD_LINK_THRESHOLD) {
       partAScore += SCORE_RULE_4A_DEAD_LINK;
       partAReasons.push(linkMetrics.deadLinks + '个死链/不存在子页面');
     }
@@ -784,7 +784,7 @@ export class ScoringEngine {
     if (linkMetrics.hasDuplicateLinks && linkMetrics.duplicateLinks) {
       for (const dup of linkMetrics.duplicateLinks) {
         const n = dup.elementCount;
-        if (n >= 3) {
+        if (n >= 4) {
           const dupScore = Math.floor(Math.min(30, 8 * Math.log2(n)));
           partAScore += dupScore;
           partAReasons.push(n + '个不同元素指向同一链接');
@@ -820,7 +820,40 @@ export class ScoringEngine {
       partBReasons.push(linkMetrics.externalArchiveLinks + '个外链指向压缩包');
     }
 
-    if (partBScore > 0) {
+    // Part C：页面文本/TXT中的隐藏压缩包链接（多级跳转检测）
+    // 仅当 Part A 和 Part B 均未触发强信号时执行，避免与明确证据叠加
+    let partCScore = 0;
+    const partCReasons = [];
+
+    if (partBScore < 30) {
+      // C-a：页面文本中扫描到的跨域压缩包链接（非 <a> 标签，置信度较低，每链接 +5）
+      if (linkMetrics.textArchiveUrls && linkMetrics.textArchiveUrls.length > 0) {
+        const crossDomainTextUrls = linkMetrics.textArchiveUrls.filter(function(u) { return u.isCrossDomain; });
+        if (crossDomainTextUrls.length > 0) {
+          const textScore = Math.min(20, crossDomainTextUrls.length * 5);
+          partCScore += textScore;
+          partCReasons.push('页面文本中发现' + crossDomainTextUrls.length + '个隐藏压缩包链接');
+        }
+      }
+
+      // C-b：.txt 文件中解析出的跨域压缩包链接（置信度较高，每链接 +8）
+      if (linkMetrics.txtDerivedArchiveUrls && linkMetrics.txtDerivedArchiveUrls.length > 0) {
+        const crossDomainTxtUrls = linkMetrics.txtDerivedArchiveUrls.filter(function(u) { return u.isCrossDomain; });
+        if (crossDomainTxtUrls.length > 0) {
+          const txtScore = Math.min(20, crossDomainTxtUrls.length * 8);
+          partCScore += txtScore;
+          partCReasons.push('.txt文件中发现' + crossDomainTxtUrls.length + '个隐藏压缩包链接');
+        }
+      }
+    }
+
+    if (partCScore > 0) {
+      result.score = partBScore + partCScore;
+      result.triggered = true;
+      const allReasons = partBReasons.concat(partCReasons);
+      result.detail = '链接风险(Part B+C): ' + allReasons.join('; ');
+      result.detailCN = '链接分析: ' + allReasons.join(', ') + ' (+' + (partBScore + partCScore) + ')';
+    } else if (partBScore > 0) {
       result.score = partBScore;
       result.triggered = true;
       result.detail = '外链风险(Part B): ' + partBReasons.join('; ');
@@ -1148,7 +1181,7 @@ export class ScoringEngine {
     // S 型衰减函数：score = floor(MAX / (1 + (x / (60 * b))^a))
     const denominator = 1 + Math.pow(x / (60 * DOMAIN_AGE_DECAY_B), DOMAIN_AGE_DECAY_A);
     const rawScore = SCORE_DOMAIN_AGE_MAX / denominator;
-    const score = Math.floor(rawScore);
+    const score = (x > 365) ? Math.floor(rawScore) : 0;
 
     if (score > 0) {
       result.score = score;
@@ -1203,16 +1236,13 @@ export class ScoringEngine {
     // 计算减分分值（正数，表示减去的分数）
     let bonusScore = 0;
     if (x < DOMAIN_AGE_BONUS_MIN_DAYS) {
-      // x < 180：新域名，不减分
       bonusScore = 0;
     } else if (x < DOMAIN_AGE_BONUS_MAX_DAYS) {
-      // 180 ≤ x < 730：线性插值
       bonusScore = Math.floor(
         SCORE_DOMAIN_AGE_BONUS_MAX * (x - DOMAIN_AGE_BONUS_MIN_DAYS) /
         (DOMAIN_AGE_BONUS_MAX_DAYS - DOMAIN_AGE_BONUS_MIN_DAYS)
       );
     } else {
-      // x ≥ 730：封顶最大减分
       bonusScore = SCORE_DOMAIN_AGE_BONUS_MAX;
     }
 
