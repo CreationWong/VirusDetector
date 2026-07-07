@@ -2,14 +2,15 @@
  * Virus Detector — Content Script (内容脚本)
  *
  * 注入到每个页面中，负责采集页面数据供评分引擎使用。
- * 在 document_idle 阶段运行，分两次采集（600ms + 3500ms）以捕获懒加载内容。
+ * 在 document_idle 阶段运行，分两次空闲采集（600ms + 3500ms）以捕获懒加载内容。
+ * 二次扫描跳过 HEAD 死链验证，避免重复网络请求和主线程压力。
  *
  * @module content-script
  *
  * 职责：
  *   1. 采集链接分析数据 (collectLinkMetrics) — 规则四 + 规则二 Phase A 数据源
  *      - 同页链接（完整 URL 精确匹配）
- *      - 死链检测（HEAD 请求验证，上限 5 个）
+ *      - 死链检测（HEAD 请求验证，上限 5 个，二次扫描跳过）
  *      - 重复链接追踪（>=4 个元素指向同一链接 → 规则 A-③）
  *      - 外链下载分析（下载按钮文本 + 文件扩展名）
  *      - 压缩包链接专项采集（同域+跨域全覆盖，为 Rule 2 Phase A 提供主动扫描数据）
@@ -32,7 +33,9 @@
    * - 重复链接（≥4个元素指向同一链接）
    * - 外链下载分析
    */
-  async function collectLinkMetrics() {
+  async function collectLinkMetrics(options) {
+    options = options || {};
+    var checkDeadLinks = options.checkDeadLinks !== false;
     var currentUrl = window.location.href;
     var currentOrigin = window.location.origin;
     var currentHost = window.location.hostname;
@@ -121,7 +124,7 @@
     }
 
     // ② 死链检测：对同域名不同路径的链接进行HEAD请求验证（限5个）
-    if (deadLinkCandidates.length > 0) {
+    if (checkDeadLinks && deadLinkCandidates.length > 0) {
       // 去重（按href）
       var uniqueCandidates = [];
       var seenHrefs = new Set();
@@ -285,8 +288,8 @@
 
   // ==================== 规则五：页面度量采集 ====================
 
-  function collectTextSignals() {
-    const bodyText = (document.body ? document.body.innerText : '') || '';
+  function collectTextSignals(bodyText) {
+    bodyText = bodyText || '';
     const textLength = bodyText.length;
 
     // CJK 统计与 background/icp-utils.js 保持同一判定口径。
@@ -338,7 +341,8 @@
     };
   }
 
-  function collectPageMetrics() {
+  function collectPageMetrics(bodyText) {
+    bodyText = bodyText || '';
     const html = document.documentElement.outerHTML || '';
     const htmlLines = html.split('\n').length;
 
@@ -445,7 +449,6 @@
     var hasFrameworkMarkers = allFrameworkHits.length > 0;
 
     // 页面文本长度
-    const bodyText = (document.body ? document.body.innerText : '') || '';
     const textLength = bodyText.length;
 
     // Meta generator（AI生成页面的典型特征，保留供未来分析）
@@ -594,7 +597,7 @@
 
     // 6. TreeWalker 扫描全页面所有文本节点
     let count = 0;
-    const MAX_NODES = 50000; // 足够覆盖大型页面
+    const MAX_NODES = 15000; // 控制大型页面扫描成本，常规 ICP 文本通常位于页脚或备案相关元素
     try {
       const walker = document.createTreeWalker(
         document.body || document.documentElement, NodeFilter.SHOW_TEXT,
@@ -638,20 +641,22 @@
   // 首次扫描结果缓存，用于二次扫描去重
   var _firstScanData = null;
 
-  async function sendAnalysisResult() {
+  async function sendAnalysisResult(options) {
+    options = options || {};
     // 每个采集函数独立 try-catch，一个失败不影响其他
-    var pageMetrics = safeCollect(collectPageMetrics, null);
+    var bodyText = safeCollect(function() { return (document.body ? document.body.innerText : '') || ''; }, '');
+    var pageMetrics = safeCollect(function() { return collectPageMetrics(bodyText); }, null);
     var icpStrings = safeCollect(findIcpStrings, []);
     // 链接分析含异步HEAD请求检测死链，需await
     var linkMetrics = null;
     try {
-      linkMetrics = await collectLinkMetrics();
+      linkMetrics = await collectLinkMetrics({ checkDeadLinks: options.checkDeadLinks !== false });
     } catch (e) {
       console.error('[VirusDetector] 链接分析采集失败:', e);
     }
 
     var hasIcpGovLink = checkIcpGovLink();
-    var textSignals = safeCollect(collectTextSignals, null);
+    var textSignals = safeCollect(function() { return collectTextSignals(bodyText); }, null);
     var payload = {
       url: window.location.href, domain: window.location.hostname, title: document.title,
       icpStrings: icpStrings, pageMetrics: pageMetrics, linkMetrics: linkMetrics,
@@ -693,17 +698,18 @@
         try {
           var linkMetrics = null;
           try {
-            linkMetrics = await collectLinkMetrics();
+            linkMetrics = await collectLinkMetrics({ checkDeadLinks: true });
           } catch (e) {
             console.error('[VirusDetector] 链接分析采集失败:', e);
           }
+          var bodyText = (document.body ? document.body.innerText : '') || '';
           sendResponse({
             success: true,
-            pageMetrics: safeCollect(collectPageMetrics, null),
+            pageMetrics: safeCollect(function() { return collectPageMetrics(bodyText); }, null),
             linkMetrics: linkMetrics,
             icpStrings: safeCollect(findIcpStrings, []),
             hasIcpGovLink: checkIcpGovLink(),
-            textSignals: safeCollect(collectTextSignals, null),
+            textSignals: safeCollect(function() { return collectTextSignals(bodyText); }, null),
             title: document.title,
             url: window.location.href
           });
@@ -718,16 +724,30 @@
 
   // ==================== 初始化 ====================
 
+  function runWhenIdle(fn) {
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(fn, { timeout: 1500 });
+    } else {
+      setTimeout(fn, 0);
+    }
+  }
+
+  function scheduleAnalysis(delayMs, options) {
+    setTimeout(function() {
+      runWhenIdle(function() { sendAnalysisResult(options); });
+    }, delayMs);
+  }
+
   function init() {
-    setTimeout(sendAnalysisResult, 600);
-    // 二次扫描（懒加载页脚）
-    setTimeout(sendAnalysisResult, 3500);
+    scheduleAnalysis(600, { checkDeadLinks: true });
+    // 二次扫描用于捕获懒加载内容，但跳过 HEAD 死链验证以降低页面和网络成本。
+    scheduleAnalysis(3500, { checkDeadLinks: false });
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     init();
   } else {
-    window.addEventListener('load', () => setTimeout(sendAnalysisResult, 600));
+    window.addEventListener('load', () => scheduleAnalysis(600, { checkDeadLinks: true }));
   }
 
 })();
