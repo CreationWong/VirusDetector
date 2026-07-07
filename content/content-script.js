@@ -402,8 +402,8 @@
     var totalExternalResources = allExternal.size;
     var hasExternalResources = totalExternalResources > 0;
 
-    // 框架标记检测（增强版：HTML全文扫描 + window全局变量双重检测）
-    // 注：此列表需与 utils/constants.js 中 FRAMEWORK_HTML_MARKERS 保持同步
+    // 框架标记检测：优先基于资源 URL 和 DOM 特征，避免依赖 Content Script 隔离世界中不可靠的 window.* 全局变量。
+    // 注：HTML marker 列表需与 utils/constants.js 中 FRAMEWORK_HTML_MARKERS 保持同步
     const FRAMEWORK_HTML_MARKERS = [
       'react', 'vue', 'angular', 'webpack', '__initial_state__',
       '_next/', 'nuxt', 'svelte', 'jquery', 'bootstrap',
@@ -412,7 +412,54 @@
       'webpackjsonp', '__webpack_require__', '__nuxt', '__next'
     ];
 
-    // A. HTML 源码全文扫描（不再限制5000字符，搜索范围覆盖整个HTML文档）
+    const FRAMEWORK_RESOURCE_MARKERS = [
+      '_next/', '/_next/', 'next/static', '_nuxt/', '/_nuxt/',
+      'react', 'react-dom', 'vue', 'vue-router', 'angular',
+      'svelte', 'jquery', 'bootstrap', 'webpack'
+    ];
+
+    const scriptSrcs = Array.from(document.querySelectorAll('script[src]'))
+      .map(function(s) { return s.getAttribute('src') || ''; })
+      .filter(Boolean);
+    const linkHrefs = Array.from(document.querySelectorAll('link[href]'))
+      .map(function(l) { return l.getAttribute('href') || ''; })
+      .filter(Boolean);
+    const resourceUrlText = scriptSrcs.concat(linkHrefs).join(' ').toLowerCase();
+
+    // A. 资源 URL 扫描（框架产物通常会在 script/link URL 中留下稳定目录或包名）
+    var resourceFrameworkHits = [];
+    for (var rf = 0; rf < FRAMEWORK_RESOURCE_MARKERS.length; rf++) {
+      if (resourceUrlText.indexOf(FRAMEWORK_RESOURCE_MARKERS[rf]) !== -1) {
+        resourceFrameworkHits.push(FRAMEWORK_RESOURCE_MARKERS[rf]);
+      }
+    }
+
+    // B. DOM 特征扫描：框架根节点、SSR 数据节点、编译产物属性等。
+    var domFrameworkHits = [];
+    try {
+      if (document.getElementById('__next') || document.querySelector('[id="__next"]')) domFrameworkHits.push('next-dom');
+      if (document.getElementById('__nuxt') || document.querySelector('[id="__nuxt"]')) domFrameworkHits.push('nuxt-dom');
+      if (document.querySelector('[ng-version]')) domFrameworkHits.push('angular-dom');
+      if (document.querySelector('[data-reactroot], [data-reactid]')) domFrameworkHits.push('react-dom');
+      if (document.querySelector('[data-svelte-h], [data-sveltekit]')) domFrameworkHits.push('svelte-dom');
+      if (document.querySelector('[x-data]')) domFrameworkHits.push('alpine-dom');
+
+      const attrScanNodes = document.getElementsByTagName('*');
+      const attrScanLimit = Math.min(attrScanNodes.length, 2000);
+      for (let ai = 0; ai < attrScanLimit; ai++) {
+        const attrs = attrScanNodes[ai].attributes || [];
+        for (let aj = 0; aj < attrs.length; aj++) {
+          const attrName = attrs[aj].name || '';
+          if (attrName.startsWith('data-v-')) {
+            domFrameworkHits.push('vue-sfc-dom');
+            ai = attrScanLimit; // 跳出外层扫描
+            break;
+          }
+        }
+      }
+    } catch (e) { /* DOM 查询异常时跳过框架 DOM 特征 */ }
+
+    // C. HTML 源码全文扫描（兜底，覆盖 SSR 数据和内联框架标记）
     const htmlLower = html.toLowerCase();
     var htmlFrameworkHits = [];
     for (var i = 0; i < FRAMEWORK_HTML_MARKERS.length; i++) {
@@ -421,32 +468,52 @@
       }
     }
 
-    // B. window 全局变量检测（捕获外部JS加载的框架，即使HTML源码中无痕迹）
-    var globalFrameworkHits = [];
-    try {
-      if (window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) globalFrameworkHits.push('react');
-      if (window.Vue || window.__VUE__) globalFrameworkHits.push('vue');
-      if (window.angular || document.querySelector('[ng-version]')) globalFrameworkHits.push('angular');
-      if (window.jQuery) globalFrameworkHits.push('jquery');
-      if (window.__NEXT_DATA__) globalFrameworkHits.push('next');
-      if (window.__NUXT__) globalFrameworkHits.push('nuxt');
-      if (window.__webpack_require__ || window.webpackJsonp) globalFrameworkHits.push('webpack');
-      if (window.__svelte || window.__svelte__) globalFrameworkHits.push('svelte');
-      if (window.bootstrap || (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal)) globalFrameworkHits.push('bootstrap');
-      // Vue 的 DOM 痕迹（Vue 会在元素上添加 data-v-xxxxxxxx 属性）
-      if (document.querySelector('[data-v-]')) globalFrameworkHits.push('vue');
-    } catch (e) { /* 跨域iframe或安全策略可能抛出异常 */ }
-
     // 合并并去重
     var allFrameworkHits = [];
     var frameworkSeen = new Set();
-    htmlFrameworkHits.concat(globalFrameworkHits).forEach(function(hit) {
+    resourceFrameworkHits.concat(domFrameworkHits, htmlFrameworkHits).forEach(function(hit) {
       if (!frameworkSeen.has(hit)) {
         frameworkSeen.add(hit);
         allFrameworkHits.push(hit);
       }
     });
     var hasFrameworkMarkers = allFrameworkHits.length > 0;
+
+    // JS 引用规范检查：模板化/克隆式资源布局，不依赖单一固定路径。
+    const suspiciousScriptRefs = [];
+    const suspiciousScriptPatterns = [
+      {
+        type: 'generic_lang_bundle',
+        pattern: /(^|\/)js\/(lang|language|i18n|locale|locales)\/[^/]+\.js$/
+      },
+      {
+        type: 'template_lang_bundle',
+        pattern: /(^|\/)(p|template|templates|theme|themes|skin|skins|static|statics|public|assets)\/js\/(lang|language|i18n|locale|locales)\/[^/]+\.js$/
+      },
+      {
+        type: 'template_generic_bundle',
+        pattern: /(^|\/)(p|template|templates|theme|themes|skin|skins|statics)\/js\/(common|config|public|base|main|app|index|jquery)[^/]*\.js$/
+      }
+    ];
+    for (let si = 0; si < scriptSrcs.length; si++) {
+      const rawSrc = scriptSrcs[si];
+      let pathname = '';
+      try {
+        pathname = new URL(rawSrc, window.location.href).pathname.toLowerCase();
+      } catch (e) {
+        pathname = rawSrc.toLowerCase().split('?')[0].split('#')[0];
+      }
+      for (let pi = 0; pi < suspiciousScriptPatterns.length; pi++) {
+        const item = suspiciousScriptPatterns[pi];
+        if (item.pattern.test(pathname)) {
+          suspiciousScriptRefs.push({
+            type: item.type,
+            src: rawSrc.substring(0, 160)
+          });
+          break;
+        }
+      }
+    }
 
     // 页面文本长度
     const textLength = bodyText.length;
@@ -470,6 +537,8 @@
       totalScriptsWithSrc,
       hasFrameworkMarkers,
       frameworkHits: allFrameworkHits,
+      suspiciousScriptRefCount: suspiciousScriptRefs.length,
+      suspiciousScriptRefs: suspiciousScriptRefs.slice(0, 5),
       textLength,
       generator,
       inlineStyles,

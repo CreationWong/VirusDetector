@@ -538,22 +538,23 @@ export class ScoringEngine {
 
   // ==================== 规则五：代码工程化检测（最高60分） ====================
   /**
-   * 检测页面代码质量，基于三信号组合判定体系：
+   * 检测页面代码质量，基于多信号组合判定体系：
    *
    * 前提：页面文本内容 > 500 字符（排除空白/占位页面，避免误报）
    *
-   * 三信号：
+   * 结构信号：
    *   信号1 — DOM节点数 < 100       （页面结构过于简单，不受HTML格式化影响）
-   *   信号2 — 无主流框架痕迹         （HTML标记 + window全局变量双重检测）
+   *   信号2 — 无主流框架痕迹         （资源 URL + DOM 特征 + HTML 标记检测）
    *   信号3 — 外部资源去重总数 < 5    （脚本+样式+图片+字体+媒体，不含同源资源）
+   *   信号4 — 可疑 JS 引用模式        （模板化语言包/通用脚本路径等克隆式资源布局）
    *
    * 组合判定（信号数替代原OR逻辑，降低对正常简单页面的误报）：
-   *   3/3 信号全中 → +30 分（高度可疑：经典钓鱼空壳三特征齐备）
-   *   2/3 信号命中 → +20 分（中度可疑：两个维度异常）
+   *   ≥3 个信号命中 → +30 分（高度可疑：经典钓鱼空壳/克隆站特征齐备）
+   *   2 个信号命中 → +20 分（中度可疑：两个维度异常）
    *   0-1 信号     →   0 分（证据不足，不单独加分）
    *
    * 设计原则：
-   *   - 正常页面几乎不会三信号全中（即有外部资源、有框架、DOM复杂）
+   *   - 正常页面几乎不会多个结构信号同时命中（即有外部资源、有框架、DOM复杂）
    *   - 单信号在正常页面中常见（如简单博客无框架），不应处罚
    *   - 钓鱼/AI生成页面通常同时满足多个信号，组合判定可精准识别
    *
@@ -579,7 +580,7 @@ export class ScoringEngine {
     // ---- 子规则 B：关键词预筛选 + Emoji 密度检测（独立于三信号体系） ----
     const emojiDensityResult = this._evaluateRule5EmojiDensity(pageText, textSignals);
 
-    // ---- 子规则 A：三信号组合判定 ----
+    // ---- 子规则 A：结构信号组合判定 ----
     let signalScore = 0;
     let signalDetail = '';
     let signalDetailCN = '';
@@ -590,6 +591,7 @@ export class ScoringEngine {
       const hasExternal = !!(pageMetrics.hasExternalResources);
       const totalExternal = pageMetrics.totalExternalResources || 0;
       const hasFramework = !!(pageMetrics.hasFrameworkMarkers);
+      const suspiciousScriptRefCount = pageMetrics.suspiciousScriptRefCount || 0;
 
       // 收集命中的信号
       const signals = [];
@@ -609,18 +611,23 @@ export class ScoringEngine {
         signals.push(`外部资源仅${totalExternal}个`);
       }
 
+      // 信号4：克隆站常见的异常 JS 引用路径
+      if (suspiciousScriptRefCount > 0) {
+        signals.push(`异常JS引用${suspiciousScriptRefCount}个`);
+      }
+
       const signalCount = signals.length;
 
       // 组合判定
       if (signalCount >= AI_PAGE_THRESHOLDS.RULE_5_SIGNALS_FULL) {
         signalScore = SCORE_RULE_5;
         signalTriggered = true;
-        signalDetail = `代码工程质量差(${signalCount}/3信号): ${signals.join('; ')}`;
+        signalDetail = `代码工程质量差(${signalCount}个结构信号): ${signals.join('; ')}`;
         signalDetailCN = `代码工程化: 高度可疑 (${signals.join(', ')})`;
       } else if (signalCount >= AI_PAGE_THRESHOLDS.RULE_5_SIGNALS_PARTIAL) {
         signalScore = SCORE_RULE_5_PARTIAL;
         signalTriggered = true;
-        signalDetail = `代码工程化弱信号(${signalCount}/3信号): ${signals.join('; ')}`;
+        signalDetail = `代码工程化弱信号(${signalCount}个结构信号): ${signals.join('; ')}`;
         signalDetailCN = `代码工程化: 中度可疑 (${signals.join(', ')})`;
       } else if (signalCount === 1) {
         signalDetail = `代码工程化基本正常（仅${signals[0]}）`;
