@@ -15,9 +15,16 @@ class SettingsApp {
     /** @type {Object} 当前设置（运行时状态） */
     this.settings = { ...SETTINGS_DEFAULTS };
     /** @type {string} 当前显示的 section ID */
-    this._activeSection = 'general';
+    this._activeSection = localStorage.getItem('vt_activeSection') || 'general';
     /** @type {'basic'|'advanced'} 当前模式 */
-    this._mode = 'basic';  // 'basic' | 'advanced' | 'developer'
+    this._mode = localStorage.getItem('vt_mode') || 'basic';
+    // 基本模式下不在高级专属分区
+    if (this._mode === 'basic') {
+      const advancedOnly = ['thresholds', 'download', 'blacklist'];
+      if (advancedOnly.includes(this._activeSection)) {
+        this._activeSection = 'general';
+      }
+    }
     /** @type {Object} 灵敏度预设应用时的覆盖层 */
     this._presetOverrides = {};
     /** @type {boolean} 灵敏度预设是否正在应用（防止循环更新） */
@@ -27,9 +34,11 @@ class SettingsApp {
   // ==================== 初始化 ====================
 
   async init() {
+    // 先同步修正侧栏 active（constructor 已从 localStorage 恢复 _activeSection），
+    // 避免 HTML 中 hardcoded 的 general active 闪烁一帧后再跳转。
+    this._renderSidebar();
     await this._loadSettings();
     this._applyTheme();
-    this._renderSidebar();
     this._renderSection(this._activeSection);
     this._bindEvents();
     this._applyModeToDom();
@@ -97,27 +106,11 @@ class SettingsApp {
     return true; // developer mode: 显示全部
   }
 
-  /** 渲染侧栏导航（根据当前模式过滤） */
+  /** 侧栏导航高亮（静态 HTML，仅更新 active 类） */
   _renderSidebar() {
-    const nav = document.getElementById('sidebar-nav');
-    if (!nav) return;
-
-    nav.innerHTML = '';
-    for (const section of SECTIONS) {
-      if (!this._isVisible(section.mode)) continue;
-
-      const item = document.createElement('a');
-      item.className = 'nav-item' + (section.id === this._activeSection ? ' active' : '');
-      item.dataset.section = section.id;
-      if (section.mode === 'advanced') {
-        item.dataset.mode = 'advanced';
-      }
-      item.innerHTML = `
-        <span class="nav-icon">${section.iconSVG}</span>
-        ${section.label}
-      `;
-      nav.appendChild(item);
-    }
+    document.querySelectorAll('.nav-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.section === this._activeSection);
+    });
   }
 
   /** 渲染指定 section 的内容
@@ -566,6 +559,15 @@ class SettingsApp {
   _setMode(mode) {
     if (this._mode === mode) return;
     this._mode = mode;
+    try { localStorage.setItem('vt_mode', mode); } catch(e) {}
+    // 切回基础模式时，若当前在高级专属分区则跳转到常规
+    if (mode === 'basic') {
+      const advancedOnly = ['thresholds', 'download', 'blacklist'];
+      if (advancedOnly.includes(this._activeSection)) {
+        this._activeSection = 'general';
+        try { localStorage.setItem('vt_activeSection', 'general'); } catch(e) {}
+      }
+    }
     this._applyModeToDom();
     this._renderSidebar();
     this._renderSection(this._activeSection);
@@ -585,6 +587,7 @@ class SettingsApp {
 
   _switchSection(sectionId) {
     this._activeSection = sectionId;
+    try { localStorage.setItem('vt_activeSection', sectionId); } catch(e) {}
     this._renderSection(sectionId);
     // 高亮侧栏
     document.querySelectorAll('.nav-item').forEach(el => {

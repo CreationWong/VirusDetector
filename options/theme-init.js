@@ -1,14 +1,14 @@
 /**
- * 同步读取 localStorage 中缓存的主题，在 CSS 加载前立即设置 data-theme。
- * 作为独立的外部脚本在 <head> 最顶部同步加载，确保零闪烁。
- * 不依赖 chrome.storage（异步），因为那会导致一帧深色残留。
+ * 同步读取 localStorage 中缓存的主题和模式，在 CSS 加载前立即设置 data-theme 和 data-mode，
+ * 避免页面首次渲染时出现深→浅色闪烁或侧边栏闪烁。
  */
 (function () {
   try {
-    var t = localStorage.getItem('vt_theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.setAttribute('data-theme', localStorage.getItem('vt_theme') || 'dark');
+    document.documentElement.setAttribute('data-mode', localStorage.getItem('vt_mode') || 'basic');
   } catch (e) {
     document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.setAttribute('data-mode', 'basic');
   }
-  document.documentElement.style.display = '';
+  // display:none 由 body-sync.js 在所有 DOM 修正完成后解除
 })();
