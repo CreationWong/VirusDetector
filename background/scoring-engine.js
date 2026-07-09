@@ -812,7 +812,7 @@ export class ScoringEngine {
         result.icpVerified = true;
         result.icpNumbers = realNumbers;
         result.detail = `检测到ICP备案号: ${realNumbers[0]}（已核验）`;
-        result.detailCN = `ICP备案: 已检测到 (${realNumbers[0]})`;
+        result.detailCN = `ICP备案: 检测到 (${realNumbers[0]})`;
         return result;
       }
 
