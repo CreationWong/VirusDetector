@@ -192,7 +192,7 @@
     els.scoreValue.textContent = score;
     // 动态更新评分卡片（颜色、图标、刻度尺指示器）
     updateScoreDisplay(els.scoreValue, els.safeGaugeIndicator, els.safeScoreIcon, score, false);
-    if (els.currentDomain) els.currentDomain.textContent = data.domain || '该页面不支持/不进行检测';
+    if (els.currentDomain) els.currentDomain.textContent = data.domain || '';
   }
 
   function showWhitelisted(data) {
@@ -556,11 +556,12 @@
     if (!bgContainer || !tooltip) return;
 
     try {
-      const stored = await chrome.storage.local.get('updateAvailable');
-      if (stored && stored.updateAvailable) {
+      const r = await chrome.storage.local.get('update_info');
+      const info = r && r.update_info;
+      if (info && info.hasUpdate) {
         // 有新版本 → 自动展开并维持，显示"新版本!"
         bgContainer.classList.add('expanded');
-        tooltip.textContent = '新版本!';
+        tooltip.textContent = '有新版本!';
       } else {
         // 无新版本 → 仅 hover 时展开，显示"了解更多"
         bgContainer.classList.remove('expanded');
