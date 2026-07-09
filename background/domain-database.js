@@ -592,7 +592,7 @@ const DOMAIN_DATABASE = [
 // ========== 压缩工具 ==========
   {
     name: 'WinRAR',
-    officialDomains: ['rarlab.com', 'win-rar.com'],
+    officialDomains: ['rarlab.com', 'win-rar.com', 'winrar.com.cn'],
     correctUrl: 'https://www.rarlab.com',
     category: SOFTWARE_CATEGORIES.COMPRESSION,
     keywords: ['WinRAR', 'winrar', 'rar'],

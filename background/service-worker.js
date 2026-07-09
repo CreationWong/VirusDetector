@@ -24,6 +24,7 @@ import { ScoringEngine, setActiveSettings } from './scoring-engine.js';
 import { DomainDatabase } from './domain-database.js';
 import { CacheManager } from './cache-manager.js';
 import { DownloadBlacklist } from './download-blacklist.js';
+import { ResourceResolver } from './resource-resolver/index.js';
 import { registerNonChineseBrandDomains } from './icp-utils.js';
 import { UrlUtils } from '../utils/url-utils.js';
 import {
@@ -805,6 +806,20 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   }
 
   // 构建页面上下文（不再需要SSL检测）
+  // Resource Resolver：从 resourceData 构建 ResourceGraph（L0 检测，异步不阻塞）
+  let resourceGraph = null;
+  const resourceData = tabState._resourceData || null;
+  if (resourceData) {
+    try {
+      resourceGraph = await ResourceResolver.resolve(url || tabState.url, resourceData);
+      // 缓存到 tabState 供下载事件等后续使用
+      tabState._resourceGraph = resourceGraph;
+    } catch (e) {
+      console.warn('[ServiceWorker] ResourceResolver 解析失败（不影响检测）:', e.message);
+      resourceGraph = null;
+    }
+  }
+
   const ctx = {
     url: tabState.url || url,
     domain: tabState.domain || domain,
@@ -813,7 +828,8 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
     hasIcpGovLink: tabState.hasIcpGovLink || false,
     linkMetrics: linkMetrics || tabState.linkMetrics || null,
     downloadState: tabState.downloadState || { hasDownloadedArchive: false },
-    pageMetrics: pageMetrics || tabState.pageMetrics || null
+    pageMetrics: pageMetrics || tabState.pageMetrics || null,
+    resourceGraph: resourceGraph
   };
 
   // 运行评分引擎（两阶段：同步首屏 + Whois异步补充）
@@ -1148,7 +1164,8 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     const dlSettings = await getSettings();
     setActiveSettings(dlSettings);
     const rule2Result = await ScoringEngine._evaluateRule2(
-      tabState.downloadState, tabState.linkMetrics, existingScore, matchedEntry
+      tabState.downloadState, tabState.linkMetrics, existingScore, matchedEntry,
+      tabState._resourceGraph || null
     );
 
     tabState.ruleResults.rule2 = rule2Result;
@@ -1288,6 +1305,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ts.domain = domain || ts.domain;
         if (pageMetrics) ts.pageMetrics = pageMetrics;
         if (linkMetrics) ts.linkMetrics = linkMetrics;
+        // 存储 Resource Resolver 数据
+        if (message.payload.resourceData) {
+          ts._resourceData = message.payload.resourceData;
+        }
         await saveTabState(tabId, ts);
         // 触发完整分析
         analyzePage(tabId, ts.url, ts.domain, pageMetrics, linkMetrics).catch(console.error);
