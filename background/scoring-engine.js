@@ -58,6 +58,18 @@ import {
   DOWNLOAD_VALID_DAYS_THRESHOLD, DOWNLOAD_CREATION_DAYS_THRESHOLD
 } from '../utils/constants.js';
 
+// ==================== 品牌顶级域名（Brand TLD，ICANN 授权企业运营） ====================
+// 这些 TLD 由对应企业完全控制，其下所有域名均为该企业的官方资产，
+// 不存在仿冒可能，可安全跳过域名仿冒检测。
+const BRAND_TLDS = new Set([
+  'google',       // Google Registry
+  'goog',         // Google Registry（变体）
+  'microsoft',    // Microsoft Corporation
+  'apple',        // Apple Inc.
+  'amazon',       // Amazon Registry
+  'aws',          // Amazon Web Services
+]);
+
 // ==================== 模块级设置解析 ====================
 
 /** 当前活跃的 settings 对象（evaluateSync/evaluateDomainAgePart 调用前设置，调用后恢复） */
@@ -478,6 +490,14 @@ export class ScoringEngine {
     if (domain.endsWith('.edu.cn')) {
       result.detail = '教育机构域名（.edu.cn），跳过域名仿冒检测';
       result.detailCN = '域名: 教育机构域名';
+      return result;
+    }
+
+    // ---- 品牌顶级域名前置检查 ----
+    // Brand TLD 由对应企业完全控制，其下所有子域名均为官方资产，可安全跳过
+    if (BRAND_TLDS.has(domain.split('.').pop())) {
+      result.detail = '品牌顶级域名（.' + domain.split('.').pop() + '），跳过域名仿冒检测';
+      result.detailCN = '域名: 品牌顶级域名';
       return result;
     }
 
