@@ -33,6 +33,7 @@ import {
   SCORE_THRESHOLD, DOWNLOAD_CONFIRM_THRESHOLD, RISK_LEVEL, MSG_TYPES,
   STORAGE_KEYS, CACHE_TTL, DETECT_NON_ARCHIVE_FILES_DEFAULT,
   VERSION, REPORT_API_URL, GITHUB_RELEASES_API_URL, GITHUB_RELEASES_PAGE,
+  UPDATE_VERSION_API_URL, UPDATE_CHANNEL, UPDATE_CHECK_TIMEOUT_MS, UPDATE_RETRY_DELAY_MINUTES,
   ICP_API_CONFIG, SCORE_SITE_BLACKLIST
 } from '../utils/constants.js';
 import { SETTINGS_DEFAULTS } from '../utils/settings-schema.js';
@@ -51,6 +52,8 @@ import { SETTINGS_DEFAULTS } from '../utils/settings-schema.js';
  * @param {string} url
  * @returns {boolean} true 表示应跳过（不分析）
  */
+
+
 /**
  * 判断主机名是否为内网/保留地址（RFC 1918 等），这类地址应跳过整站检测。
  * 覆盖：回环 127.0.0.0/8、私有 10.0.0.0/8、192.168.0.0/16、172.16.0.0/12、
@@ -145,54 +148,150 @@ function compareVersions(a, b) {
 }
 
 /**
- * 从 GitHub Releases API 检查最新版本，结果存入 chrome.storage.local。
- * 公开仓库无需认证，24h 周期远低于 60次/小时的速率限制。
+ * 判定更新渠道：
+ * - UPDATE_CHANNEL 常量为 'store' / 'manual' 时直接使用（上架打包时由构建脚本改写为 'store'）
+ * - 'auto' 时根据 manifest.update_url 判定：商店安装会被商店注入该字段，
+ *   手动安装（开发者模式 / zip 解包）则为 undefined
+ */
+function getUpdateChannel() {
+  if (UPDATE_CHANNEL === 'store' || UPDATE_CHANNEL === 'manual') return UPDATE_CHANNEL;
+  return chrome.runtime.getManifest().update_url ? 'store' : 'manual';
+}
+
+/** 带超时的 fetch；超时产生的 AbortError 统一改写为可读的超时错误 */
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error(`请求超时（>${UPDATE_CHECK_TIMEOUT_MS / 1000}s）`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 主源：Cloudflare Worker 版本代理 */
+async function fetchVersionFromWorker() {
+  const resp = await fetchWithTimeout(UPDATE_VERSION_API_URL, {
+    headers: { 'Accept': 'application/json' }
+  });
+  if (!resp.ok) throw new Error(`Worker HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (!data || typeof data.version !== 'string' || !/^\d+\.\d+/.test(data.version)) {
+    throw new Error('Worker 返回数据格式无效');
+  }
+  return {
+    version: data.version,
+    releaseUrl: data.releaseUrl || GITHUB_RELEASES_PAGE,
+    releaseNotes: typeof data.releaseNotes === 'string' ? data.releaseNotes : '',
+    publishedAt: data.publishedAt || null
+  };
+}
+
+/** 回退源：GitHub Releases API 直连（未认证 60次/小时/IP，共享出口 IP 下易被限流） */
+async function fetchVersionFromGitHub() {
+  const resp = await fetchWithTimeout(GITHUB_RELEASES_API_URL, {
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': `VirusDetector/${chrome.runtime.getManifest().version}`
+    }
+  });
+  if (!resp.ok) throw new Error(`GitHub HTTP ${resp.status}`);
+  const release = await resp.json();
+  const version = String(release.tag_name || '').replace(/^v/i, '');
+  if (!version) throw new Error('GitHub 返回数据缺少 tag_name');
+  return {
+    version,
+    releaseUrl: release.html_url || GITHUB_RELEASES_PAGE,
+    releaseNotes: String(release.body || '').substring(0, 2000),
+    publishedAt: release.published_at || null
+  };
+}
+
+/**
+ * 检查更新，结果存入 chrome.storage.local。
+ *
+ * - 商店渠道（store）：跳过远程检查，由浏览器商店自动更新
+ * - 手动渠道（manual）：Worker 代理 → GitHub API 直连，逐级回退
+ * - 全部失败时保留上次成功的版本信息，仅更新错误状态，并提前安排重试
+ * - 成功后恢复 24 小时周期的定时检查
  */
 async function checkForUpdate() {
-  const localVersion = VERSION;
-  console.log('[ServiceWorker] 正在检查更新，当前版本:', localVersion);
-  try {
-    const resp = await fetch(GITHUB_RELEASES_API_URL, {
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'User-Agent': `VirusDetector/${VERSION}`
-      }
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const localVersion = chrome.runtime.getManifest().version;
+  const channel = getUpdateChannel();
+  console.log('[ServiceWorker] 正在检查更新，当前版本:', localVersion, '渠道:', channel);
 
-    const release = await resp.json();
-    const tagName = release.tag_name || '';
-    const remoteVersion = tagName.replace(/^v/i, '');
-    const hasUpdate = compareVersions(remoteVersion, localVersion) > 0;
-
-    const info = {
-      lastCheck: Date.now(),
-      latestVersion: remoteVersion,
-      currentVersion: localVersion,
-      hasUpdate,
-      releaseUrl: release.html_url || GITHUB_RELEASES_PAGE,
-      releaseNotes: (release.body || '').substring(0, 2000),
-      publishedAt: release.published_at || null,
-      error: null
-    };
-    await chrome.storage.local.set({ [STORAGE_KEYS.UPDATE_INFO]: info });
-
-    console.log('[ServiceWorker] 更新检查完成:', hasUpdate ? `发现新版本 v${remoteVersion}` : '已是最新版本');
-  } catch (e) {
-    console.error('[ServiceWorker] 更新检查失败:', e.message);
+  if (channel === 'store') {
     await chrome.storage.local.set({
       [STORAGE_KEYS.UPDATE_INFO]: {
         lastCheck: Date.now(),
+        channel,
         latestVersion: null,
         currentVersion: localVersion,
         hasUpdate: false,
         releaseUrl: null,
         releaseNotes: null,
         publishedAt: null,
-        error: e.message
+        error: null
       }
     });
+    return;
   }
+
+  const sources = [
+    ['Worker 代理', fetchVersionFromWorker],
+    ['GitHub API', fetchVersionFromGitHub]
+  ];
+
+  let lastError = null;
+  for (const [name, fetchVersion] of sources) {
+    try {
+      const data = await fetchVersion();
+      const hasUpdate = compareVersions(data.version, localVersion) > 0;
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.UPDATE_INFO]: {
+          lastCheck: Date.now(),
+          channel,
+          latestVersion: data.version,
+          currentVersion: localVersion,
+          hasUpdate,
+          releaseUrl: data.releaseUrl,
+          releaseNotes: data.releaseNotes,
+          publishedAt: data.publishedAt,
+          error: null
+        }
+      });
+      // 恢复 24h 周期检查
+      await chrome.alarms.create('updateCheck', { periodInMinutes: 1440 });
+      console.log(`[ServiceWorker] 更新检查完成（${name}）:`, hasUpdate ? `发现新版本 v${data.version}` : '已是最新版本');
+      return;
+    } catch (e) {
+      lastError = e;
+      console.warn(`[ServiceWorker] 更新源「${name}」失败: ${e.message}`);
+    }
+  }
+
+  // 全部更新源失败：保留上次成功的版本信息（按当前版本重新计算 hasUpdate），仅更新错误状态
+  const prev = (await chrome.storage.local.get(STORAGE_KEYS.UPDATE_INFO))[STORAGE_KEYS.UPDATE_INFO];
+  const latestVersion = prev?.latestVersion ?? null;
+  console.error('[ServiceWorker] 更新检查失败:', lastError?.message);
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.UPDATE_INFO]: {
+      lastCheck: Date.now(),
+      channel,
+      latestVersion,
+      currentVersion: localVersion,
+      hasUpdate: latestVersion ? compareVersions(latestVersion, localVersion) > 0 : false,
+      releaseUrl: prev?.releaseUrl ?? null,
+      releaseNotes: prev?.releaseNotes ?? null,
+      publishedAt: prev?.publishedAt ?? null,
+      error: lastError?.message || '未知错误'
+    }
+  });
+  // 安排提前重试（成功后会恢复 24h 周期）
+  await chrome.alarms.create('updateCheck', { delayInMinutes: UPDATE_RETRY_DELAY_MINUTES });
 }
 
 // ==================== 缓存清洗 ====================

@@ -8,8 +8,12 @@
  */
 
 // ==================== 版本号（统一入口） ====================
-/** 当前扩展版本号，所有模块引用此常量，发版时仅需修改此处 + manifest.json + README */
-export const VERSION = '2.5.0';
+/**
+ * 当前扩展版本号，用于 User-Agent 与上报载荷等展示性用途。
+ * 注意：更新检测以 chrome.runtime.getManifest().version 为唯一真源，不依赖此常量；
+ * 发版时仍需同步修改此处 + manifest.json + README（本常量已与 manifest 脱节过一次，见 v2.5.1）。
+ */
+export const VERSION = '2.5.1';
 
 // ==================== 评分体系 ====================
 /** 触发警告的总分阈值（注入拦截 + 警告窗口 + 图标变红） */
@@ -233,11 +237,32 @@ export const CACHE_TTL = 24 * 60 * 60 * 1000;  // 24小时
 export const REPORT_API_URL = 'https://virus-detector-report.lolitide.workers.dev/api/report';
 
 // ==================== 更新检测 ====================
-/** GitHub Releases API（获取最新版本） */
+/**
+ * Cloudflare Worker 版本查询接口（主源）。
+ * Worker 服务端请求 GitHub API 并做边缘缓存，规避 api.github.com
+ * 按来源 IP 60次/小时 的未认证限额（共享出口 IP 下极易耗尽）。
+ */
+export const UPDATE_VERSION_API_URL = 'https://virus-detector-report.lolitide.workers.dev/api/version';
+
+/** GitHub Releases API（回退源，Worker 不可达时使用） */
 export const GITHUB_RELEASES_API_URL = 'https://api.github.com/repos/Lolitide/VirusDetector/releases/latest';
 
 /** GitHub Releases 页面（用户手动下载） */
 export const GITHUB_RELEASES_PAGE = 'https://github.com/Lolitide/VirusDetector/releases';
+
+/**
+ * 更新渠道：'auto' | 'manual' | 'store'
+ * - 'auto'：运行时根据 manifest.update_url 判定（商店安装会被商店注入该字段）
+ * - 'store'：跳过远程检查（浏览器商店自动更新）；上架打包时由构建脚本改写为此值
+ * - 'manual'：始终执行远程检查（GitHub zip / 开发者模式安装）
+ */
+export const UPDATE_CHANNEL = 'auto';
+
+/** 单个更新源的超时时间（毫秒） */
+export const UPDATE_CHECK_TIMEOUT_MS = 8000;
+
+/** 更新检查失败后的重试间隔（分钟），成功后恢复 24h 周期 */
+export const UPDATE_RETRY_DELAY_MINUTES = 60;
 
 // ==================== RDAP / Whois API 配置 ====================
 /** RDAP IANA 引导文件 URL（TLD → RDAP 服务器映射） */
