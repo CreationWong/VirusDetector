@@ -40,7 +40,7 @@
   --text3: #999999;
   --border: #f1f1f1;
   --bg-hover: #f7f7f7;
-  --wl-bg: #e8eaf6;
+  --wl-bg: #f9f9f9;
   --wl-color: #283593;
   --wl-color-hover: #5c6bc0;
   --wl-border: #5c6bc0;
@@ -266,7 +266,8 @@ body {
 
 /* ===== Main Content ===== */
 #main-content {
-  flex: 1;
+  flex:1;
+  min-height: 250px;
   padding: 16px 20px;
   overflow-y: auto;
 }
@@ -283,7 +284,7 @@ body {
 
 #loading {
   text-align: center;
-  padding: 50px 0;
+  padding: 46px 0;
 }
 
 .spinner {
@@ -753,7 +754,8 @@ body {
   padding: 5px 5px 5px 10px;
   background: var(--bg2);
   gap: 5px;
-  overflow: hidden;
+  overflow: visible;
+  z-index: 10;
 }
 
 .footer-btn {
@@ -768,11 +770,11 @@ body {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
-  overflow: hidden;
+  overflow: visible;
   flex-shrink: 1;
   min-width: fit-content;
-
   z-index: 3;
+  position: relative;
 }
 
 .footer-btn svg {
@@ -781,42 +783,36 @@ body {
   height: 20px;
 }
 
-.tip-up {
+/* ===== Footer Button Hover Tip — 悬浮提示文字从按钮后上滑 ===== */
+.footer-btn::after {
+  content: attr(data-tip);
   position: absolute;
-  font-size: 17px;
+  bottom: calc(100% + 2px);
+  z-index: -1;
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  font-size: 15px;
+  font-weight: 700;
   letter-spacing: 1px;
-  line-height: 22px;
-  font-weight: bold;
-  top: 8px;
-  right: 57px;
-  z-index: 1;
-  opacity: 0.3;
-  transition: opacity 0.3s ease 0.06s;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
-.tip-down {
-  position: absolute;
-  font-size: 20px;
-  letter-spacing: 1px;
-  line-height: 22px;
-  font-weight: bold;
-  right: 33px;
-  bottom: 8px;
-  z-index: 1;
-  opacity: 0.4;
-  transition: opacity 0.3s ease 0.1s;
+.footer-btn:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
-.tip-icon {
-  position: absolute;
-  font-size: 60px;
-  font-weight: bold;
-  bottom: -13px;
-  right: 10px;
-  z-index: 1;
-  opacity: 0.5;
-  transition: opacity 0.3s ease 0.14s;
-}
+/* 各按钮提示文字颜色对应各自按钮颜色 */
+#report-false-btn::after { color: var(--orange); }
+#report-phish-btn::after { color: var(--red); }
+#whitelist-btn::after   { color: var(--wl-border); }
+#blacklist-btn::after   { color: var(--bl-border); }
+#refresh-btn::after     { color: var(--green); }
+
+
 /* ---- Button Label: always visible ---- */
 .btn-label {
   padding-right: 10px;
@@ -886,6 +882,12 @@ body {
   color: var(--red-dark);
   border-color: var(--red-dark);
 }
+#report-phish-btn.confirming {
+  background: var(--red-light);
+  color: var(--red-dark);
+  border-color: var(--red-dark);
+  animation: pulse 1s infinite;
+}
 
 /* Whitelist (blue) */
 .whitelist-btn:hover:not(:disabled) {
@@ -921,6 +923,21 @@ body {
   background: var(--green-light);
   color: var(--green-dark);
   border-color: var(--green-dark);
+}
+
+/* ===== Dark Mode — 按钮 active/hover 背景改为深色 ===== */
+[data-theme="dark"] #report-false-btn:hover:not(:disabled),
+[data-theme="dark"] #report-false-btn.active {
+  background: rgba(255, 152, 0, 0.12);
+}
+[data-theme="dark"] #report-phish-btn:hover:not(:disabled),
+[data-theme="dark"] #report-phish-btn.active,
+[data-theme="dark"] #report-phish-btn.confirming {
+  background: rgba(244, 67, 54, 0.12);
+}
+[data-theme="dark"] #refresh-btn:hover:not(:disabled),
+[data-theme="dark"] #refresh-btn.active {
+  background: rgba(76, 175, 80, 0.12);
 }
 
 /* ===== Whitelist State ===== */
@@ -961,4 +978,5 @@ body {
   color: var(--text3);
   font-weight: 400;
   margin-top: 4px;
+  padding-bottom:4px;
 }

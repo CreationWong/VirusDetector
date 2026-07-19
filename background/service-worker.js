@@ -941,7 +941,7 @@ function openWarningWindow(tabState) {
  */
 async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   // 防御性深度：所有进入分析入口的 URL 都先经协议守卫
-  // 覆盖三个调用方：webNavigation、PAGE_ANALYSIS_RESULT 消息、REMOVE_FROM_WHITELIST
+  // 覆盖调用方：webNavigation、PAGE_ANALYSIS_RESULT 消息、REMOVE_FROM_WHITELIST、REMOVE_SITE_BLACKLIST
   if (shouldSkipUrl(url)) {
     console.log('[ServiceWorker] 跳过非 http(s) URL:', url);
     await CacheManager.remove('').catch(() => {});
@@ -971,6 +971,18 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
   // 站点黑名单检查：如果在站点黑名单中，直接赋予高分触发警告流程
   if (await SiteBlacklist.isBlacklisted(domain)) {
     console.log('[ServiceWorker] 站点在黑名单中，直接标记为高风险:', domain);
+    // 保存当前分析数据备份（如果存在完整的非黑名单分析结果），以便移除黑名单后恢复
+    if (tabState.isAnalyzed && tabState.ruleResults && Object.keys(tabState.ruleResults).length > 0
+        && !tabState.ruleResults.siteBlacklist && !tabState._preBlacklistState) {
+      tabState._preBlacklistState = {
+        domain: tabState.domain,
+        score: tabState.score,
+        riskLevel: tabState.riskLevel,
+        ruleResults: { ...tabState.ruleResults },
+        correctUrl: tabState.correctUrl,
+        officialName: tabState.officialName
+      };
+    }
     tabState.score = SCORE_SITE_BLACKLIST;
     tabState.riskLevel = RISK_LEVEL.WARNING;
     tabState.isAnalyzed = true;
@@ -980,9 +992,9 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
       siteBlacklist: { triggered: true, score: SCORE_SITE_BLACKLIST, detail: '站点黑名单命中', detailCN: '站点黑名单: 用户标记为恶意网站' }
     };
     await saveTabState(tabId, tabState);
-    setIconWarning(tabId, tabState.score);
+    setIconRed(tabId);
     // 触发完整警告流程
-    triggerWarningFlow(tabId, url, domain, tabState.score, tabState).catch(e =>
+    triggerWarningFlow(tabId, tabState).catch(e =>
       console.error('[ServiceWorker] 黑名单警告流程失败:', e));
     return;
   }
@@ -1619,15 +1631,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await removeDownloadBlocker(tabs[0].id);
           // 更新当前标签页状态
           const ts = await loadTabState(tabs[0].id);
+          // 保存移除白名单后可恢复的分析数据备份（含域名用于防呆校验）
+          ts._preWhitelistState = {
+            domain: ts.domain,
+            score: ts.score,
+            riskLevel: ts.riskLevel,
+            ruleResults: ts.ruleResults,
+            correctUrl: ts.correctUrl,
+            officialName: ts.officialName
+          };
           ts.isWhitelisted = true;
           ts.score = 0;
           ts.riskLevel = RISK_LEVEL.SAFE;
           ts.isAnalyzed = true;
           await saveTabState(tabs[0].id, ts);
           setIconWhitelist(tabs[0].id);
-          // 清除该域名的缓存（使其不再被分析）
-          const domain = UrlUtils.extractHostname(url);
-          if (domain) await CacheManager.remove(domain);
+          // 不删除域名缓存，以便移除白名单后可恢复检测状态
         }
         sendResponse({ success: true });
       });
@@ -1641,14 +1660,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const url = message.payload?.url || '';
         if (url) {
           await removeFromWhitelist(url);
-          // 清除标签页状态，触发重新分析
           const ts = await loadTabState(tabs[0].id);
           ts.isWhitelisted = false;
-          ts.isAnalyzed = false;
-          await saveTabState(tabs[0].id, ts);
-          // 触发重新分析
-          analyzePage(tabs[0].id, ts.url || url, ts.domain || UrlUtils.extractHostname(url),
-            null, null).catch(console.error);
+
+          // 尝试从备份恢复分析数据，避免不必要的重新检测
+          // 增加防呆校验：备份域名必须与当前页面域名一致（防止页面导航后恢复过期数据）
+          const currentDomain = ts.domain || UrlUtils.extractHostname(url);
+          const backup = ts._preWhitelistState;
+          if (backup && backup.ruleResults && Object.keys(backup.ruleResults).length > 0
+              && backup.domain === currentDomain) {
+            ts.score = backup.score;
+            ts.riskLevel = backup.riskLevel;
+            ts.ruleResults = backup.ruleResults;
+            ts.correctUrl = backup.correctUrl;
+            ts.officialName = backup.officialName;
+            ts.isAnalyzed = true;
+            delete ts._preWhitelistState;
+            await saveTabState(tabs[0].id, ts);
+            // 根据恢复的分数还原图标
+            const threshold = getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD);
+            if (ts.score >= threshold) {
+              setIconRed(tabs[0].id);
+            } else {
+              setIconGreen(tabs[0].id, ts.score);
+            }
+          } else {
+            // 无备份数据（页面可能已重新加载），需要触发重新分析
+            ts.isAnalyzed = false;
+            delete ts._preWhitelistState;
+            await saveTabState(tabs[0].id, ts);
+            analyzePage(tabs[0].id, ts.url || url, ts.domain || UrlUtils.extractHostname(url),
+              null, null).catch(console.error);
+          }
         }
         sendResponse({ success: true });
       });
@@ -1787,6 +1830,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await saveWhitelist(whitelist.filter(d => d !== domain));
           }
           await SiteBlacklist.add(domain, { addedBy });
+          
+          // 保存当前标签页的分析数据备份，以便移除黑名单后恢复
+          try {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs.length > 0) {
+              const currentTs = await loadTabState(tabs[0].id);
+              if (currentTs.isAnalyzed && currentTs.ruleResults && Object.keys(currentTs.ruleResults).length > 0
+                  && !currentTs.ruleResults.siteBlacklist) {
+                currentTs._preBlacklistState = {
+                  domain: currentTs.domain,
+                  score: currentTs.score,
+                  riskLevel: currentTs.riskLevel,
+                  ruleResults: { ...currentTs.ruleResults },
+                  correctUrl: currentTs.correctUrl,
+                  officialName: currentTs.officialName
+                };
+                await saveTabState(tabs[0].id, currentTs);
+              }
+            }
+          } catch (e) { /* 保存备份失败不影响主流程 */ }
+          
           sendResponse({ success: true, added: domain });
         } catch (e) { sendResponse({ success: false, error: e.message }); }
       })();
@@ -1797,7 +1861,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case MSG_TYPES.REMOVE_SITE_BLACKLIST:
     case 'REMOVE_SITE_BLACKLIST': {
       const targetDomain = message.payload?.domain || '';
-      SiteBlacklist.remove(targetDomain).then(() => {
+      SiteBlacklist.remove(targetDomain).then(async (wasRemoved) => {
+        // 只有确实移除了条目时才触发恢复/重新分析流程
+        // 避免在"加入白名单前先移出黑名单"的互斥操作中，对不在黑名单中的站点触发无意义的重新分析
+        if (!wasRemoved) {
+          sendResponse({ success: true, removed: targetDomain });
+          return;
+        }
+        try {
+          const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tabs.length > 0) {
+            const ts = await loadTabState(tabs[0].id);
+            // 如果网站已在白名单中，不修改状态（白名单优先）
+            if (await isWhitelisted(ts.url || '')) {
+              sendResponse({ success: true, removed: targetDomain });
+              return;
+            }
+            const currentDomain = ts.domain || targetDomain;
+
+            // 尝试从备份恢复分析数据，避免不必要的重新检测
+            const backup = ts._preBlacklistState;
+            if (backup && backup.ruleResults && Object.keys(backup.ruleResults).length > 0
+                && backup.domain === currentDomain) {
+              ts.score = backup.score;
+              ts.riskLevel = backup.riskLevel;
+              ts.ruleResults = backup.ruleResults;
+              ts.correctUrl = backup.correctUrl;
+              ts.officialName = backup.officialName;
+              ts.isAnalyzed = true;
+              delete ts._preBlacklistState;
+              await saveTabState(tabs[0].id, ts);
+              // 根据恢复的分数还原图标
+              const threshold = getEffectiveThreshold('scoreThreshold', SCORE_THRESHOLD);
+              if (ts.score >= threshold) {
+                setIconRed(tabs[0].id);
+              } else {
+                setIconGreen(tabs[0].id, ts.score);
+              }
+            } else {
+              // 无备份数据，触发重新分析
+              ts.isAnalyzed = false;
+              delete ts._preBlacklistState;
+              await saveTabState(tabs[0].id, ts);
+              analyzePage(tabs[0].id, ts.url || '', ts.domain || targetDomain,
+                null, null).catch(console.error);
+            }
+          }
+        } catch (e) {
+          console.error('[ServiceWorker] 黑名单移除后恢复失败:', e);
+        }
         sendResponse({ success: true, removed: targetDomain });
       });
       return true;

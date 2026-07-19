@@ -70,7 +70,7 @@
     els.whitelistPanel.style.display = 'none';
     els.safetyTips.style.display = 'none';
     els.officialLinkSection.style.display = 'none';
-    els.detailsSection.style.display = 'block';
+    els.detailsSection.style.display = 'none';
     els.header.className = 'header-safe';
     _resetDetailIcons();
   }
@@ -366,6 +366,21 @@
 
   // ==================== 主渲染 ====================
 
+  // 上报按钮提交状态追踪（popup 生命周期内记住"已上报"）
+  let _reportedFalse = false;
+  let _reportedPhish = false;
+
+  /** 根据当前页面状态 + 上报追踪 更新底部按钮 hover 提示文字 */
+  function _setButtonTips(data) {
+    const reportFalseBtn = document.getElementById('report-false-btn');
+    const reportPhishBtn = document.getElementById('report-phish-btn');
+    if (reportFalseBtn) reportFalseBtn.setAttribute('data-tip', _reportedFalse ? '已上报' : '误报');
+    if (reportPhishBtn) reportPhishBtn.setAttribute('data-tip', _reportedPhish ? '已上报' : '钓鱼');
+    els.whitelistBtn.setAttribute('data-tip', (data && data.isWhitelisted) ? '已添加' : '白名单');
+    els.blacklistBtn.setAttribute('data-tip', (data && data.isSiteBlacklisted) ? '已添加' : '黑名单');
+    els.refreshBtn.setAttribute('data-tip', '刷新');
+  }
+
   async function render() {
     showLoading();
     let data = await fetchState();
@@ -390,6 +405,7 @@
       showBlacklisted(data);
       updateBlacklistButton(true);
       updateWhitelistButton(false);
+      _setButtonTips(data);
       return;
     }
 
@@ -398,6 +414,7 @@
       showWhitelisted(data);
       updateWhitelistButton(true);
       updateBlacklistButton(!!data.isSiteBlacklisted);
+      _setButtonTips(data);
       return;
     }
 
@@ -409,13 +426,16 @@
     updateDetails(data.ruleResults);
     updateWhitelistButton(false);
     updateBlacklistButton(!!data.isSiteBlacklisted);
+    _setButtonTips(data);
   }
 
   // ==================== 按钮事件 ====================
 
   els.refreshBtn.addEventListener('click', async () => {
     els.refreshBtn.classList.add('active');
+    els.refreshBtn.setAttribute('data-tip', '刷新中');
     els.refreshBtn.disabled = true;
+    showLoading();
     await requestReanalysis();
     await render();
     els.refreshBtn.classList.remove('active');
@@ -469,6 +489,7 @@
           type: 'SUBMIT_REPORT',
           payload: { reportType: 'false_positive', domain, note: '' }
         });
+        _reportedFalse = true;
         await render();
       } catch (e) {
         console.error('[Popup] 误报上报失败:', e);
@@ -478,11 +499,36 @@
     });
   }
 
-  // 上报按钮：钓鱼确认（无二次确认，直接触发）
+  // 上报按钮：钓鱼确认（两步确认：点击一次→"确定钓鱼？"，再点击→正式上报）
   const reportPhishBtn = document.getElementById('report-phish-btn');
+  let _phishConfirmPending = false;
+  let _phishConfirmTimer = null;
+
+  /** 取消钓鱼确认状态 */
+  function _cancelPhishConfirm() {
+    _phishConfirmPending = false;
+    if (_phishConfirmTimer) { clearTimeout(_phishConfirmTimer); _phishConfirmTimer = null; }
+    reportPhishBtn.setAttribute('data-tip', '钓鱼');
+    reportPhishBtn.classList.remove('active', 'confirming');
+    reportPhishBtn.disabled = false;
+  }
 
   if (reportPhishBtn) {
     reportPhishBtn.addEventListener('click', async () => {
+      // 第一步：不是确认状态 → 进入确认状态
+      if (!_phishConfirmPending) {
+        _phishConfirmPending = true;
+        reportPhishBtn.setAttribute('data-tip', '确定钓鱼?');
+        reportPhishBtn.classList.add('active', 'confirming');
+        // 3秒后自动取消确认
+        _phishConfirmTimer = setTimeout(() => {
+          _cancelPhishConfirm();
+        }, 3000);
+        return;
+      }
+
+      // 第二步：确认状态 → 正式上报
+      _cancelPhishConfirm();
       reportPhishBtn.classList.add('active');
       reportPhishBtn.disabled = true;
       try {
@@ -493,11 +539,19 @@
           type: 'SUBMIT_REPORT',
           payload: { reportType: 'confirmed_phish', domain, note: '' }
         });
+        _reportedPhish = true;
         await render();
       } catch (e) {
         console.error('[Popup] 钓鱼确认上报失败:', e);
         reportPhishBtn.classList.remove('active');
         reportPhishBtn.disabled = false;
+      }
+    });
+
+    // 点击页面其他区域取消确认状态
+    document.addEventListener('click', (e) => {
+      if (_phishConfirmPending && !reportPhishBtn.contains(e.target)) {
+        _cancelPhishConfirm();
       }
     });
   }
@@ -508,35 +562,38 @@
     els.whitelistBtn.disabled = true;
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length === 0) return;
-      const url = tabs[0].url || '';
+      if (tabs.length > 0) {
+        const url = tabs[0].url || '';
+        // 仅对有效的 HTTP URL 执行白名单操作
+        if (url && url.startsWith('http')) {
+          const checkResp = await chrome.runtime.sendMessage({
+            type: 'CHECK_WHITELIST',
+            payload: { url }
+          });
+          const isCurrentlyWhitelisted = checkResp?.isWhitelisted || false;
 
-      const checkResp = await chrome.runtime.sendMessage({
-        type: 'CHECK_WHITELIST',
-        payload: { url }
-      });
-      const isCurrentlyWhitelisted = checkResp?.isWhitelisted || false;
-
-      if (isCurrentlyWhitelisted) {
-        await chrome.runtime.sendMessage({
-          type: 'REMOVE_FROM_WHITELIST',
-          payload: { url }
-        });
-      } else {
-        // 加入白名单时同时移出黑名单（互斥）
-        await chrome.runtime.sendMessage({
-          type: 'REMOVE_SITE_BLACKLIST',
-          payload: { domain: new URL(url).hostname }
-        });
-        await chrome.runtime.sendMessage({
-          type: 'ADD_TO_WHITELIST',
-          payload: { url }
-        });
+          if (isCurrentlyWhitelisted) {
+            await chrome.runtime.sendMessage({
+              type: 'REMOVE_FROM_WHITELIST',
+              payload: { url }
+            });
+          } else {
+            // 加入白名单时同时移出黑名单（互斥）
+            await chrome.runtime.sendMessage({
+              type: 'REMOVE_SITE_BLACKLIST',
+              payload: { domain: new URL(url).hostname }
+            });
+            await chrome.runtime.sendMessage({
+              type: 'ADD_TO_WHITELIST',
+              payload: { url }
+            });
+          }
+        }
       }
-
       await render();
     } catch (e) {
       console.error('[Popup] 白名单操作失败:', e);
+      await render();
     }
     els.whitelistBtn.disabled = false;
   });
@@ -547,36 +604,38 @@
     els.blacklistBtn.disabled = true;
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tabs.length === 0) return;
-      const url = tabs[0].url || '';
-      if (!url || !url.startsWith('http')) return;
+      if (tabs.length > 0) {
+        const url = tabs[0].url || '';
+        // 仅对有效的 HTTP URL 执行黑名单操作
+        if (url && url.startsWith('http')) {
+          const domain = new URL(url).hostname;
 
-      const domain = new URL(url).hostname;
+          const resp = await chrome.runtime.sendMessage({ type: 'GET_SITE_BLACKLIST' });
+          const blacklist = (resp && resp.data) ? resp.data : {};
+          const isCurrentlyBlacklisted = blacklist.hasOwnProperty(domain);
 
-      const resp = await chrome.runtime.sendMessage({ type: 'GET_SITE_BLACKLIST' });
-      const blacklist = (resp && resp.data) ? resp.data : {};
-      const isCurrentlyBlacklisted = blacklist.hasOwnProperty(domain);
-
-      if (isCurrentlyBlacklisted) {
-        await chrome.runtime.sendMessage({
-          type: 'REMOVE_SITE_BLACKLIST',
-          payload: { domain }
-        });
-      } else {
-        // 加入黑名单时同时移出白名单（互斥）
-        await chrome.runtime.sendMessage({
-          type: 'REMOVE_FROM_WHITELIST',
-          payload: { url }
-        });
-        await chrome.runtime.sendMessage({
-          type: 'ADD_SITE_BLACKLIST',
-          payload: { domain, addedBy: 'popup' }
-        });
+          if (isCurrentlyBlacklisted) {
+            await chrome.runtime.sendMessage({
+              type: 'REMOVE_SITE_BLACKLIST',
+              payload: { domain }
+            });
+          } else {
+            // 加入黑名单时同时移出白名单（互斥）
+            await chrome.runtime.sendMessage({
+              type: 'REMOVE_FROM_WHITELIST',
+              payload: { url }
+            });
+            await chrome.runtime.sendMessage({
+              type: 'ADD_SITE_BLACKLIST',
+              payload: { domain, addedBy: 'popup' }
+            });
+          }
+        }
       }
-
       await render();
     } catch (e) {
       console.error('[Popup] 黑名单操作失败:', e);
+      await render();
     }
     els.blacklistBtn.disabled = false;
   });

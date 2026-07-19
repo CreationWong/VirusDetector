@@ -118,9 +118,10 @@ export class SiteBlacklist {
   /**
    * 从站点黑名单中移除指定域名
    * @param {string} domain
+   * @returns {Promise<boolean>} true 表示确实移除了条目，false 表示域名不在黑名单中
    */
   static async remove(domain) {
-    if (!domain) return;
+    if (!domain) return false;
     const normalized = domain.toLowerCase();
     const mainDomain = UrlUtils.getMainDomain(normalized);
     const blacklist = await this.getAll();
@@ -139,6 +140,7 @@ export class SiteBlacklist {
       await this._save(blacklist);
       console.log('[SiteBlacklist] 已移除:', normalized);
     }
+    return removed;
   }
 
   // ==================== 维护操作 ====================
