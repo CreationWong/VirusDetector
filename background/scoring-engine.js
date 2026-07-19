@@ -498,6 +498,8 @@ export class ScoringEngine {
     if (domain.endsWith('.gov.cn')) {
       result.detail = '政府站点域名（.gov.cn），跳过域名仿冒检测';
       result.detailCN = '域名: 政府站点';
+      return result;
+    }
     // ---- 品牌顶级域名前置检查 ----
     // Brand TLD 由对应企业完全控制，其下所有子域名均为官方资产，可安全跳过
     if (BRAND_TLDS.has(domain.split('.').pop())) {

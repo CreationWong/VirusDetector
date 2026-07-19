@@ -877,25 +877,16 @@ function injectBlockerFunc(archiveUrls, detectNonArchive, mode) {
 
   // ══════════════════════════════════════════════════════
   // Part 5: MutationObserver 动态监控（旧版能力）
-  // 'lightweight' 模式下跳过（仅 JS hooks + click 拦截）
   // ══════════════════════════════════════════════════════
-
   var observer = new MutationObserver(function() {
     disableExistingDownloadButtons();
   });
   blockerState.observer = observer;
-  if (mode !== 'lightweight') {
 
-    var observer = new MutationObserver(function() {
-      disableExistingDownloadButtons();
-    });
-
-    if (document.body) {
-      observer.observe(document.body, { childList: true, subtree: true });
-      // 30 秒后停止观察（避免性能影响）
-      setTimeout(function() { observer.disconnect(); }, 30000);
-    }
-
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+    // 30 秒后停止观察（避免性能影响）
+    setTimeout(function() { observer.disconnect(); }, 30000);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1003,7 +994,7 @@ async function analyzePage(tabId, url, domain, pageMetrics, linkMetrics) {
       siteBlacklist: { triggered: true, score: SCORE_SITE_BLACKLIST, detail: '站点黑名单命中', detailCN: '站点黑名单: 用户标记为恶意网站' }
     };
     await saveTabState(tabId, tabState);
-    setIconWarning(tabId, tabState.score);
+    setIconRed(tabId, tabState.score);
     // 触发完整警告流程
     triggerWarningFlow(tabId, url, domain, tabState.score, tabState).catch(e =>
       console.error('[ServiceWorker] 黑名单警告流程失败:', e));
