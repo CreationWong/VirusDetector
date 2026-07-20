@@ -172,6 +172,7 @@
   }
 
   function updateWhitelistButton(isWhitelisted) {
+    const iconEl = els.whitelistBtn.querySelector('.btn-icon');
     if (isWhitelisted) {
       els.whitelistBtn.innerHTML = ICONS.starOff;
       els.whitelistBtn.classList.add('active');

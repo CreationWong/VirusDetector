@@ -764,11 +764,11 @@ body {
   color: var(--text2);
   padding: 10px 19px;
   border-radius: 5px;
-  font-size: 18px;
+  font-size: 14px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   white-space: nowrap;
   overflow: visible;
   flex-shrink: 1;
@@ -820,6 +820,13 @@ body {
   white-space: nowrap;
   display: inline-block;
 }
+
+/* 各按钮文字颜色 */
+#report-false-btn .btn-label { color: var(--orange); }
+#report-phish-btn .btn-label { color: var(--red); }
+#whitelist-btn   .btn-label { color: var(--wl-border); }
+#blacklist-btn   .btn-label { color: var(--bl-border); }
+#refresh-btn     .btn-label { color: var(--green); }
 
 .footer-btn:hover {
   background: var(--bg-hover);
