@@ -75,7 +75,7 @@ export function formatDiagnosticConfiguration(data) {
     }
   }
 
-  return `<details>\n<summary>自动收集的诊断信息（已脱敏，可在提交前删除）</summary>\n\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\`\n</details>`;
+  return `<details>\n<summary>自动收集的诊断信息（已自动脱敏，请在提交前进行二次检查）</summary>\n\n\`\`\`yaml\n${lines.join('\n')}\n\`\`\`\n</details>`;
 }
 
 export function buildBugReportUrl(data) {
