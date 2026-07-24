@@ -37,6 +37,9 @@ import {
   ICP_API_CONFIG, SCORE_SITE_BLACKLIST
 } from '../utils/constants.js';
 import { SETTINGS_DEFAULTS } from '../utils/settings-schema.js';
+import { DiagnosticLog } from '../utils/diagnostics.js';
+
+DiagnosticLog.installConsoleCapture();
 
 // ==================== URL 协议守卫 ====================
 
@@ -2345,6 +2348,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const r = await chrome.storage.local.get(STORAGE_KEYS.UPDATE_INFO);
         sendResponse({ success: true, data: r[STORAGE_KEYS.UPDATE_INFO] });
       })();
+      return true;
+    }
+    case MSG_TYPES.GET_DIAGNOSTICS: {
+      DiagnosticLog.snapshot().then((data) => {
+        sendResponse({ success: true, data });
+      }).catch((e) => {
+        sendResponse({ success: false, error: e.message });
+      });
       return true;
     }
     default: { sendResponse({ error: 'unknown type: ' + type }); break; }
