@@ -1487,7 +1487,7 @@ class SettingsApp {
         .join(', ');
     }
 
-    const ua = navigator.userAgent || '';
+    const ua = navigator.userAgent || 'Unknown browser';
     const candidates = [
       ['Edge', /Edg\/([\d.]+)/],
       ['Opera', /OPR\/([\d.]+)/],
@@ -1499,7 +1499,7 @@ class SettingsApp {
       const match = ua.match(pattern);
       if (match) return `${name} ${match[1]}`;
     }
-    return 'Unknown browser';
+    return ua;
   }
 
   _getPlatformDescription(platform) {
